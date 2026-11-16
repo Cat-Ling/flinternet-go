@@ -272,6 +272,77 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Scroll-responsive header: shorten on downward scroll, expand on upward scroll or near top.
+  const header = document.querySelector(".search-header-container");
+  if (header) {
+    const TOP_EXPAND_Y = 36;
+    const MIN_COLLAPSE_Y = 96;
+    const DOWN_THRESHOLD = 20;
+    const UP_THRESHOLD = 28;
+    const JITTER_PX = 2;
+    const COOLDOWN_MS = 260;
+
+    let lastY = Math.max(0, window.scrollY || window.pageYOffset || 0);
+    let accum = 0;
+    let lastDir = 0;
+    let isCompact = false;
+    let cooldownUntil = 0;
+    let ticking = false;
+
+    const setCompact = (next) => {
+      if (next === isCompact) return;
+      isCompact = next;
+      header.classList.toggle("header-compact", next);
+      accum = 0;
+      cooldownUntil = performance.now() + COOLDOWN_MS;
+    };
+
+    const updateHeaderOnScroll = () => {
+      ticking = false;
+      const y = Math.max(0, window.scrollY || window.pageYOffset || 0);
+      const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+      if (maxScroll < 220 || y <= TOP_EXPAND_Y) {
+        setCompact(false);
+        lastY = y;
+        accum = 0;
+        lastDir = 0;
+        return;
+      }
+
+      const now = performance.now();
+      if (now < cooldownUntil) {
+        lastY = y;
+        return;
+      }
+
+      const delta = y - lastY;
+      lastY = y;
+      if (Math.abs(delta) < JITTER_PX) return;
+
+      const dir = delta > 0 ? 1 : -1;
+      if (dir !== lastDir) {
+        accum = 0;
+        lastDir = dir;
+      }
+      accum += Math.abs(delta);
+
+      if (dir === 1 && !isCompact && y >= MIN_COLLAPSE_Y && accum >= DOWN_THRESHOLD) {
+        if (!header.contains(document.activeElement)) {
+          setCompact(true);
+        }
+      } else if (dir === -1 && isCompact && accum >= UP_THRESHOLD) {
+        setCompact(false);
+      }
+    };
+
+    window.addEventListener("scroll", () => {
+      if (!ticking) {
+        ticking = true;
+        window.requestAnimationFrame(updateHeaderOnScroll);
+      }
+    }, { passive: true });
+  }
+
   const containers = document.querySelectorAll(".video-container");
   if (containers.length > 0 && "IntersectionObserver" in window) {
     const observer = new IntersectionObserver((entries) => {

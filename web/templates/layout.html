@@ -58,20 +58,26 @@
     </form>
   </div>
 
-  {{if .Query}}
-  <nav class="search-filters" aria-label="Search scopes">
-    <a href="/search/pins/?q={{urlquery .Query}}" class="filter-item {{if or (not .Scope) (eq .Scope "pins")}}active{{end}}">All Pins</a>
-    <a href="/search/videos/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "videos"}}active{{end}}">Videos</a>
-    <a href="/search/boards/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "boards"}}active{{end}}">Boards</a>
-    <a href="/search/users/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "users"}}active{{end}}">Users</a>
-  </nav>
-  {{end}}
+  {{if or .Query .Tabs}}
+  <div class="header-collapsible">
+    <div class="header-collapsible-inner">
+      {{if .Query}}
+      <nav class="search-filters" aria-label="Search scopes">
+        <a href="/search/pins/?q={{urlquery .Query}}" class="filter-item {{if or (not .Scope) (eq .Scope "pins")}}active{{end}}">All Pins</a>
+        <a href="/search/videos/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "videos"}}active{{end}}">Videos</a>
+        <a href="/search/boards/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "boards"}}active{{end}}">Boards</a>
+        <a href="/search/users/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "users"}}active{{end}}">Users</a>
+      </nav>
+      {{end}}
 
-  {{if .Tabs}}
-  <div class="guide-pills" aria-label="Topic guides">
-    {{range .Tabs}}
-      <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}" class="guide-chip">{{.Label}}</a>
-    {{end}}
+      {{if .Tabs}}
+      <div class="guide-pills" aria-label="Topic guides">
+        {{range .Tabs}}
+          <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}" class="guide-chip">{{.Label}}</a>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
   </div>
   {{end}}
 </header>
