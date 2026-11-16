@@ -37,7 +37,7 @@ docker compose -f docker-compose.build.yml up -d --build
 
 ## Configuration (CLI Flags & Environment Variables)
 
-Every CLI flag can be configured via environment variables (see `.env.example`):
+Every CLI flag can be configured via environment variables or a `.env` file in the working directory / alongside the binary (see `.env.example`; precedence: CLI flags > process environment > `.env`):
 
 | CLI Flag | Environment Variable | Default | Description |
 | --- | --- | --- | --- |
