@@ -103,12 +103,49 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Loading skeletons: tint with validated dominant color, track cached/lazy img + video poster completion.
+  const hexColorRe = /^#[0-9a-f]{3,8}$/i;
+  document.querySelectorAll(".post-media, .pin-media-frame, .board-thumbnail").forEach((box) => {
+    const color = box.getAttribute("data-color");
+    if (color && hexColorRe.test(color)) {
+      box.style.setProperty("--skeleton-bg", color);
+    }
+    const img = box.querySelector("img");
+    if (img) {
+      const done = () => box.classList.add("is-loaded");
+      if (img.complete) {
+        done();
+      } else {
+        img.addEventListener("load", done, { once: true });
+        img.addEventListener("error", done, { once: true });
+      }
+      return;
+    }
+    const video = box.querySelector("video");
+    if (video) {
+      const done = () => box.classList.add("is-loaded");
+      const poster = video.getAttribute("poster");
+      if (poster) {
+        const probe = new Image();
+        probe.onload = done;
+        probe.onerror = done;
+        probe.src = poster;
+        if (probe.complete) done();
+      }
+      video.addEventListener("loadeddata", done, { once: true });
+      video.addEventListener("error", done, { once: true });
+      return;
+    }
+    box.classList.add("is-loaded");
+  });
+
   // Responsive Masonry sizing
   const masonryInstances = [];
   if (typeof Masonry !== "undefined") {
     const mobile = window.innerWidth <= 620;
     document.querySelectorAll(".grid").forEach((grid) => {
       const sizer = grid.querySelector(".grid-sizer");
+      grid.classList.add("masonry-ready");
       masonryInstances.push(new Masonry(grid, {
         itemSelector: ".grid-item",
         columnWidth: sizer || 240,
@@ -118,6 +155,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }));
     });
     document.querySelectorAll(".boards-grid").forEach((grid) => {
+      grid.classList.add("masonry-ready");
       masonryInstances.push(new Masonry(grid, {
         itemSelector: ".board-card",
         columnWidth: mobile ? ".grid-sizer" : 280,
@@ -137,9 +175,14 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  let layoutRaf = 0;
   window.recalculateMasonry = () => {
-    updateShowMoreLabels();
-    masonryInstances.forEach((m) => m.layout());
+    if (layoutRaf) return;
+    layoutRaf = window.requestAnimationFrame(() => {
+      layoutRaf = 0;
+      updateShowMoreLabels();
+      masonryInstances.forEach((m) => m.layout());
+    });
   };
 
   document.addEventListener("change", (e) => {

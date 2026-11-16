@@ -9,7 +9,7 @@
       <!-- Left Column: Full Media / Video Player -->
       <div class="pin-media-column">
         {{if .Pin.IsVideo}}
-          <div class="pin-media-frame{{if and .Pin.Width .Pin.Height}} has-aspect{{end}}"{{if and .Pin.Width .Pin.Height}} data-aspect-locked="1" style="--w: {{.Pin.Width}}; --h: {{.Pin.Height}};"{{end}}>
+          <div class="pin-media-frame{{if and .Pin.Width .Pin.Height}} has-aspect{{end}}"{{if and .Pin.Width .Pin.Height}} data-aspect-locked="1" style="--w: {{.Pin.Width}}; --h: {{.Pin.Height}};"{{end}}{{if .Pin.DominantColor}} data-color="{{.Pin.DominantColor}}"{{end}}>
             <div class="video-container paused" data-autoload="true">
               <video playsinline loop muted
                 poster="{{if .IsSafari}}{{.Pin.ImageURL | proxyURL}}{{else}}{{.Pin.FallbackImageURL | proxyURL}}{{end}}"
@@ -33,10 +33,13 @@
             </div>
           </div>
         {{else}}
-          <div class="pin-media-frame{{if and .Pin.Width .Pin.Height}} has-aspect{{end}}"{{if and .Pin.Width .Pin.Height}} data-aspect-locked="1" style="--w: {{.Pin.Width}}; --h: {{.Pin.Height}};"{{end}}>
+          <div class="pin-media-frame{{if and .Pin.Width .Pin.Height}} has-aspect{{end}}"{{if and .Pin.Width .Pin.Height}} data-aspect-locked="1" style="--w: {{.Pin.Width}}; --h: {{.Pin.Height}};"{{end}}{{if .Pin.DominantColor}} data-color="{{.Pin.DominantColor}}"{{end}}>
             <img
+              {{if and .Pin.Width .Pin.Height}}width="{{.Pin.Width}}" height="{{.Pin.Height}}"{{end}}
               src="{{if .IsSafari}}{{.Pin.ImageURL | proxyURL}}{{else}}{{.Pin.FallbackImageURL | proxyURL}}{{end}}"
-              alt="{{if .Pin.AltText}}{{.Pin.AltText}}{{else if .Pin.Title}}{{.Pin.Title}}{{else}}Pinterest Pin{{end}}">
+              alt="{{if .Pin.AltText}}{{.Pin.AltText}}{{else if .Pin.Title}}{{.Pin.Title}}{{else}}Pinterest Pin{{end}}"
+              onload="this.closest('.pin-media-frame')?.classList.add('is-loaded')"
+              onerror="this.closest('.pin-media-frame')?.classList.add('is-loaded')">
           </div>
         {{end}}
       </div>

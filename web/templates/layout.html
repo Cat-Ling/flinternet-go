@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#e60023">
+  <script>document.documentElement.classList.add("has-js");</script>
   <meta name="description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}Search public Pinterest pins, videos, boards, and creators without login walls.{{end}}">
   {{if .OgURL}}<link rel="canonical" href="{{.OgURL}}">{{end}}
   <meta property="og:site_name" content="Flinternet">
@@ -142,9 +143,11 @@
         {{else}}
           <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="image-wrapper">
             <img loading="lazy"
+              {{if and .Width .Height}}width="{{.Width}}" height="{{.Height}}"{{end}}
               src="{{if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
               alt="{{if .AltText}}{{.AltText}}{{else if .Title}}{{.Title}}{{else}}Pinterest Pin{{end}}"
-              onload="if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()">
+              onload="this.closest('.post-media')?.classList.add('is-loaded');if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()"
+              onerror="this.closest('.post-media')?.classList.add('is-loaded')">
           </a>
         {{end}}
       </div>
