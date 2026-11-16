@@ -541,3 +541,19 @@ func TestMediaValidationSSRFAndHLSRewrite(t *testing.T) {
 		t.Fatalf("json marshal Pin failed: %v", err)
 	}
 }
+
+func TestExtractPinIDPreservesDoubleHyphenOpaqueIDs(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"181199584997439257", "181199584997439257"},
+		{"meadows-necklace--181199584997439257", "181199584997439257"},
+		{"e1_AfqPShx5RnTbTQyvkjDJ--ZmdoiIVjrQepld14FRe1aeJFhrUCNGaA", "e1_AfqPShx5RnTbTQyvkjDJ--ZmdoiIVjrQepld14FRe1aeJFhrUCNGaA"},
+		{"banana-dock--e1_AfqPShx5RnTbTQyvkjDJ--ZmdoiIVjrQepld14FRe1aeJFhrUCNGaA", "e1_AfqPShx5RnTbTQyvkjDJ--ZmdoiIVjrQepld14FRe1aeJFhrUCNGaA"},
+	}
+	for _, tc := range cases {
+		if got := ExtractPinID(tc.in); got != tc.want {
+			t.Fatalf("ExtractPinID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

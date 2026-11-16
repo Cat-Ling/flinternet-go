@@ -392,6 +392,20 @@ func TestSelfContainedPinSnapshotsAcrossRestarts(t *testing.T) {
 		}
 	}
 
+	// Opaque e1_ pin IDs that naturally contain "--" must never be truncated as SEO slugs.
+	doubleHyphenID := "e1_AfqPShx5RnTbTQyvkjDJ--ZmdoiIVjrQepld14FRe1aeJFhrUCNGaA"
+	dhTok, err := encodeSnapshotBytes(nil, doubleHyphenID, pinSnapshot{
+		Img:   "oj:f9accde677cff536eea02649e4d55ebb",
+		Title: "Double Hyphen Opaque Pin",
+	})
+	if err != nil {
+		t.Fatalf("encode double-hyphen snapshot failed: %v", err)
+	}
+	dhRes := doRequest(t, hNoKey2, http.MethodGet, "/pin/"+doubleHyphenID+"/?p="+dhTok, nil)
+	if dhRes.Code != http.StatusOK || !strings.Contains(dhRes.Body.String(), "Double Hyphen Opaque Pin") {
+		t.Fatalf("double-hyphen e1_ pin ID failed: code=%d", dhRes.Code)
+	}
+
 	evilTok, _ := encodeSnapshotBytes(nil, "e1_xss", pinSnapshot{
 		Img:   "oj:b1b717714fc20ded79a7580af314718d",
 		Title: `<script>alert(1)</script>`,

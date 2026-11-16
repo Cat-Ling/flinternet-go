@@ -749,10 +749,17 @@ type pinOptions struct {
 	AddFields   string `json:"add_fields,omitempty"`
 }
 
-// ExtractPinID normalizes a pin path segment such as "181199584997439257" or
-// an SEO slug such as "meadows-necklace--181199584997439257" into the raw pin ID.
+// ExtractPinID normalizes a pin path segment such as "181199584997439257",
+// an opaque "e1_..." ID (which may contain "--"), or an SEO slug such as
+// "meadows-necklace--181199584997439257" into the raw pin ID.
 func ExtractPinID(rawSegment string) string {
 	cleaned := strings.Trim(strings.TrimSpace(rawSegment), "/")
+	if strings.HasPrefix(cleaned, "e1_") {
+		return cleaned
+	}
+	if idx := strings.Index(cleaned, "--e1_"); idx >= 0 {
+		return cleaned[idx+2:]
+	}
 	if idx := strings.LastIndex(cleaned, "--"); idx >= 0 && idx+2 < len(cleaned) {
 		return cleaned[idx+2:]
 	}
