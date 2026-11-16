@@ -112,7 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
       masonryInstances.push(new Masonry(grid, {
         itemSelector: ".grid-item",
         columnWidth: sizer || 240,
-        gutter: mobile ? 10 : 16,
+        gutter: 16,
         fitWidth: !mobile,
         transitionDuration: 0,
       }));
@@ -121,7 +121,7 @@ document.addEventListener("DOMContentLoaded", () => {
       masonryInstances.push(new Masonry(grid, {
         itemSelector: ".board-card",
         columnWidth: mobile ? ".grid-sizer" : 280,
-        gutter: mobile ? 10 : 20,
+        gutter: mobile ? 16 : 20,
         fitWidth: !mobile,
         transitionDuration: 0,
       }));

@@ -139,15 +139,16 @@ a {
   align-items: center;
   justify-content: center;
   gap: 0.55rem;
-  padding: 0.35rem 1rem 0.2rem;
+  padding: 0.35rem 1rem 0.35rem;
   flex-wrap: wrap;
   max-width: 1600px;
   margin: 0 auto;
 }
 
 .guide-pills {
-  padding-top: 0.2rem;
-  padding-bottom: 0.35rem;
+  margin-top: 0.25rem;
+  padding-top: 0.35rem;
+  padding-bottom: 0.4rem;
 }
 
 .filter-item {
@@ -1109,13 +1110,13 @@ footer {
 @media (max-width: 620px) {
   .grid,
   .boards-grid {
-    padding: 0.5rem;
+    padding: 0.65rem 0.75rem;
   }
   .grid-sizer,
   .grid-item,
   .board-card {
-    width: calc(50% - 5px);
-    margin-bottom: 0.85rem;
+    width: calc(50% - 8px);
+    margin-bottom: 1rem;
   }
   .search-header {
     padding: 0.35rem 0.6rem;
