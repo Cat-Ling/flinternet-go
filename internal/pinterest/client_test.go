@@ -134,6 +134,15 @@ func TestSearchScopesAndPagination(t *testing.T) {
 								"title": "Filters",
 								"filters": [{"display": {"display_text": "All Pins"}, "action": {"feed_url": "/search/pins/?q=michigan"}}]
 							}
+						},
+						{
+							"id": "obm-genai",
+							"type": "onebarmodule",
+							"display": {"display_text": "Less AI", "is_selected": false},
+							"aux_data": {"module_type": "GENAI_FILTER"},
+							"action": {
+								"feed_url": "/search/pins/?q=michigan&filter_genai=true"
+							}
 						}
 					]
 				}
@@ -158,8 +167,8 @@ func TestSearchScopesAndPagination(t *testing.T) {
 	if page.Bookmark != "cursor-page-2" {
 		t.Fatalf("expected bookmark=cursor-page-2, got %q", page.Bookmark)
 	}
-	if len(page.Tabs) != 1 || page.Tabs[0].Label != "Sunset" {
-		t.Fatalf("expected extracted rankedGuide tab, got %+v", page.Tabs)
+	if len(page.Tabs) != 2 || page.Tabs[0].Label != "Sunset" || page.Tabs[1].Label != "Less AI" || !page.Tabs[1].FilterGenAI || !page.Tabs[1].IsGenAIFilter {
+		t.Fatalf("expected extracted rankedGuide and Less AI tab, got %+v", page.Tabs)
 	}
 	// Verify boolean false fields were NOT stripped from JSON options.
 	if !strings.Contains(seenData[0], `"filter_genai":false`) || !strings.Contains(seenData[0], `"static_feed":false`) ||
@@ -204,6 +213,14 @@ func TestSearchScopesAndPagination(t *testing.T) {
 	}
 	if !strings.Contains(seenData[2], `"page_size":null`) || !strings.Contains(seenData[2], `"rs":"content_type_filter"`) {
 		t.Fatalf("unexpected boards search options: %s", seenData[2])
+	}
+
+	// Verify FilterGenAI=true sends "filter_genai":true upstream.
+	if _, err := c.SearchPins(ctx, SearchParams{Query: "michigan", Scope: ScopePins, FilterGenAI: true}); err != nil {
+		t.Fatalf("SearchPins FilterGenAI=true failed: %v", err)
+	}
+	if !strings.Contains(seenData[len(seenData)-1], `"filter_genai":true`) {
+		t.Fatalf("expected filter_genai:true in upstream options, got %s", seenData[len(seenData)-1])
 	}
 }
 

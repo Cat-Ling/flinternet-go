@@ -187,6 +187,9 @@ type SearchTab struct {
 	Label         string          `json:"label"`
 	Query         string          `json:"query,omitempty"`
 	Scope         string          `json:"scope,omitempty"`
+	FilterGenAI   bool            `json:"filter_genai,omitempty"`
+	IsGenAIFilter bool            `json:"is_genai_filter,omitempty"`
+	IsSelected    bool            `json:"is_selected,omitempty"`
 	DominantColor string          `json:"dominant_color,omitempty"`
 	ImageURL      string          `json:"image_url,omitempty"`
 	ProxyImageURL string          `json:"proxy_image_url,omitempty"`
@@ -442,6 +445,7 @@ type rawGuideWire struct {
 
 type rawOneBarDisplayWire struct {
 	DisplayText string `json:"display_text"`
+	IsSelected  bool   `json:"is_selected"`
 }
 
 type rawOneBarActionWire struct {
@@ -460,6 +464,9 @@ type rawOneBarModuleWire struct {
 	Type    string               `json:"type"`
 	Display rawOneBarDisplayWire `json:"display"`
 	Action  rawOneBarActionWire  `json:"action"`
+	AuxData struct {
+		ModuleType string `json:"module_type"`
+	} `json:"aux_data"`
 }
 
 var defaultPreferredImageOrder = []string{"orig", "736x", "564x", "474x", "236x"}

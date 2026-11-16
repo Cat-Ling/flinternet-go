@@ -73,7 +73,7 @@
       {{if .Tabs}}
       <div class="guide-pills" aria-label="Topic guides">
         {{range .Tabs}}
-          <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}" class="guide-chip">{{.Label}}</a>
+          <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}{{if .IsGenAIFilter}}&filter_genai={{if .IsSelected}}false{{else}}true{{end}}{{else if .FilterGenAI}}&filter_genai=true{{end}}" class="guide-chip{{if .IsSelected}} active{{end}}"{{if .IsGenAIFilter}} title="Toggle Less AI filter"{{end}}>{{.Label}}</a>
         {{end}}
       </div>
       {{end}}

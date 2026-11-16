@@ -36,6 +36,7 @@ type SearchParams struct {
 	PageSize        *int
 	RS              string
 	Bookmark        string
+	FilterGenAI     bool
 	AllowUnverified *bool
 }
 
@@ -250,6 +251,9 @@ func (c *Client) Search(ctx context.Context, params SearchParams) (*PageResult[j
 	q := url.Values{}
 	q.Set("q", query)
 	q.Set("rs", rs)
+	if params.FilterGenAI {
+		q.Set("filter_genai", "true")
+	}
 	sourceURL := fmt.Sprintf("/search/%s/?%s", scope, q.Encode())
 
 	method := http.MethodGet
@@ -260,7 +264,7 @@ func (c *Client) Search(ctx context.Context, params SearchParams) (*PageResult[j
 		AppliedProductFilters:    "---",
 		SEODrawerEnabled:         false,
 		AutoCorrectionDisabled:   false,
-		FilterGenAI:              false,
+		FilterGenAI:              params.FilterGenAI,
 		SourceURL:                sourceURL,
 		StaticFeed:               false,
 		PageSize:                 pageSize,
@@ -1049,23 +1053,31 @@ func extractSearchEnvelope(data json.RawMessage, scope string) ([]json.RawMessag
 	}
 	for _, m := range env.OneBarModules {
 		if label := strings.TrimSpace(m.Display.DisplayText); label != "" && m.Action.FeedURL != "" {
+			feedQuery, filterGenAI := parseFeedURLSearch(m.Action.FeedURL)
+			isGenAI := strings.EqualFold(m.AuxData.ModuleType, "GENAI_FILTER") || strings.EqualFold(label, "Less AI")
 			tabs = append(tabs, SearchTab{
-				ID:    m.ID,
-				Label: label,
-				Query: parseQueryFromFeedURL(m.Action.FeedURL),
-				Scope: scope,
+				ID:            m.ID,
+				Label:         label,
+				Query:         feedQuery,
+				Scope:         scope,
+				FilterGenAI:   filterGenAI,
+				IsGenAIFilter: isGenAI,
+				IsSelected:    m.Display.IsSelected,
 			})
 		}
 	}
 	return items, tabs, nil
 }
 
-func parseQueryFromFeedURL(feedURL string) string {
+func parseFeedURLSearch(feedURL string) (string, bool) {
 	u, err := url.Parse(feedURL)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return u.Query().Get("q")
+	q := u.Query()
+	rawGenAI := strings.TrimSpace(strings.ToLower(q.Get("filter_genai")))
+	filterGenAI := rawGenAI == "true" || rawGenAI == "1"
+	return q.Get("q"), filterGenAI
 }
 
 func decodePinOrBoardPage[T any](env *resourceEnvelope, rawBody json.RawMessage, endpoint, grade string, convert func(json.RawMessage) (T, error)) (*PageResult[T], error) {

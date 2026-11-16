@@ -253,6 +253,7 @@ type searchRequestBody struct {
 	PageSize        *int                  `json:"page_size"`
 	RS              string                `json:"rs"`
 	Bookmark        string                `json:"bookmark"`
+	FilterGenAI     *bool                 `json:"filter_genai"`
 	AllowUnverified *bool                 `json:"allow_unverified"`
 	Raw             bool                  `json:"raw"`
 }
@@ -692,7 +693,7 @@ func (s *Server) writePinsResponse(w http.ResponseWriter, subject string, page *
 }
 
 func (s *Server) cachedSearchPins(r *http.Request, params pinterest.SearchParams) (*pinterest.PageResult[pinterest.Pin], bool, error) {
-	key := fmt.Sprintf("%s|%s|%d|%s|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.Bookmark)
+	key := fmt.Sprintf("%s|%s|%d|%s|%t|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.FilterGenAI, params.Bookmark)
 	if page, ok := s.searchPinsCache.Get(key); ok {
 		return page, true, nil
 	}
@@ -706,7 +707,7 @@ func (s *Server) cachedSearchPins(r *http.Request, params pinterest.SearchParams
 }
 
 func (s *Server) cachedSearchBoards(r *http.Request, params pinterest.SearchParams) (*pinterest.PageResult[pinterest.Board], bool, error) {
-	key := fmt.Sprintf("%s|%s|%d|%s|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.Bookmark)
+	key := fmt.Sprintf("%s|%s|%d|%s|%t|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.FilterGenAI, params.Bookmark)
 	if page, ok := s.searchBoardsCache.Get(key); ok {
 		return page, true, nil
 	}
@@ -719,7 +720,7 @@ func (s *Server) cachedSearchBoards(r *http.Request, params pinterest.SearchPara
 }
 
 func (s *Server) cachedSearchUsers(r *http.Request, params pinterest.SearchParams) (*pinterest.PageResult[pinterest.UserProfile], bool, error) {
-	key := fmt.Sprintf("%s|%s|%d|%s|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.Bookmark)
+	key := fmt.Sprintf("%s|%s|%d|%s|%t|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.FilterGenAI, params.Bookmark)
 	if page, ok := s.searchUsersCache.Get(key); ok {
 		return page, true, nil
 	}
@@ -1060,6 +1061,53 @@ func (s *Server) indexPins(pins []pinterest.Pin) {
 	}
 }
 
+const lessAICookieName = "flinternet_less_ai"
+
+func lessAICookiePref(r *http.Request) (bool, bool) {
+	if r == nil {
+		return false, false
+	}
+	c, err := r.Cookie(lessAICookieName)
+	if err != nil {
+		return false, false
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Value)) {
+	case "0", "false", "no", "off":
+		return false, true
+	case "1", "true", "yes", "on":
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+func resolveLessAIPref(w http.ResponseWriter, r *http.Request) bool {
+	if r != nil {
+		if raw := strings.TrimSpace(r.URL.Query().Get("filter_genai")); raw != "" {
+			if parsed := parseOptionalBoolParam(raw); parsed != nil {
+				if w != nil {
+					val := "0"
+					if *parsed {
+						val = "1"
+					}
+					http.SetCookie(w, &http.Cookie{
+						Name:     lessAICookieName,
+						Value:    val,
+						Path:     "/",
+						MaxAge:   365 * 24 * 3600,
+						SameSite: http.SameSiteLaxMode,
+					})
+				}
+				return *parsed
+			}
+		}
+		if pref, ok := lessAICookiePref(r); ok {
+			return pref
+		}
+	}
+	return true
+}
+
 func parseSearchRequest(r *http.Request) (pinterest.SearchParams, bool, error) {
 	if r.Method == http.MethodPost {
 		var body searchRequestBody
@@ -1067,12 +1115,23 @@ func parseSearchRequest(r *http.Request) (pinterest.SearchParams, bool, error) {
 		if err := dec.Decode(&body); err != nil {
 			return pinterest.SearchParams{}, false, errors.New("invalid JSON request body")
 		}
+		filterGenAI := false
+		if body.Scope == "" || body.Scope == pinterest.ScopePins {
+			if body.FilterGenAI != nil {
+				filterGenAI = *body.FilterGenAI
+			} else if pref, ok := lessAICookiePref(r); ok {
+				filterGenAI = pref
+			} else {
+				filterGenAI = true
+			}
+		}
 		return pinterest.SearchParams{
 			Query:           body.Query,
 			Scope:           body.Scope,
 			PageSize:        body.PageSize,
 			RS:              body.RS,
 			Bookmark:        body.Bookmark,
+			FilterGenAI:     filterGenAI,
 			AllowUnverified: body.AllowUnverified,
 		}, body.Raw, nil
 	}
@@ -1086,12 +1145,24 @@ func parseSearchRequest(r *http.Request) (pinterest.SearchParams, bool, error) {
 		}
 		pageSizePtr = &n
 	}
+	scope := pinterest.SearchScope(strings.TrimSpace(q.Get("scope")))
+	filterGenAI := false
+	if scope == "" || scope == pinterest.ScopePins {
+		if explicit := parseOptionalBoolParam(q.Get("filter_genai")); explicit != nil {
+			filterGenAI = *explicit
+		} else if pref, ok := lessAICookiePref(r); ok {
+			filterGenAI = pref
+		} else {
+			filterGenAI = true
+		}
+	}
 	return pinterest.SearchParams{
 		Query:           firstNonEmptyQuery(q.Get("q"), q.Get("query")),
-		Scope:           pinterest.SearchScope(strings.TrimSpace(q.Get("scope"))),
+		Scope:           scope,
 		PageSize:        pageSizePtr,
 		RS:              strings.TrimSpace(q.Get("rs")),
 		Bookmark:        q.Get("bookmark"),
+		FilterGenAI:     filterGenAI,
 		AllowUnverified: parseOptionalBoolParam(q.Get("allow_unverified")),
 	}, parseBoolParam(q.Get("raw")), nil
 }

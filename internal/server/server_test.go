@@ -485,3 +485,109 @@ func TestSelfContainedPinSnapshotsAcrossRestarts(t *testing.T) {
 		}
 	}
 }
+
+func TestLessAIDefaultAndCookiePersistence(t *testing.T) {
+	var seenFilterGenAI []bool
+	mockTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Type", "application/json")
+		if req.URL.Path == "/resource/BaseSearchResource/get/" {
+			rawData := req.URL.Query().Get("data")
+			fg := strings.Contains(rawData, `"filter_genai":true`)
+			seenFilterGenAI = append(seenFilterGenAI, fg)
+			title := "Unfiltered Pin"
+			if fg {
+				title = "Clean Non-AI Pin"
+			}
+			_, _ = rec.WriteString(`{"resource_response":{"status":"success","bookmark":"next-1","data":{"results":[{"id":"e1_test-1","title":"` + title + `","images":{"orig":{"url":"https://i.pinimg.com/originals/test.jpg","width":800,"height":1000}}}],"rankedGuides":[{"id":"g1","display":"Art","term":"art"}]}}}`)
+			return rec.Result(), nil
+		}
+		rec.WriteHeader(http.StatusNotFound)
+		return rec.Result(), nil
+	})
+
+	client, err := pinterest.NewClient(pinterest.Config{
+		BaseURL:                   pinterest.DefaultBaseURL,
+		AllowUnverifiedPagination: true,
+		HTTPClient:                &http.Client{Transport: mockTransport},
+	})
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	staticFS, _ := web.StaticFS()
+	tmplFS, _ := web.TemplatesFS()
+	srv, err := New(Config{
+		Client:      client,
+		StaticFS:    staticFS,
+		TemplatesFS: tmplFS,
+		CacheTTL:    time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("server.New failed: %v", err)
+	}
+	h := srv.Handler()
+
+	// 1. Default search (no query param, no cookie): Less AI is ON by default.
+	res := doRequest(t, h, http.MethodGet, "/search/pins/?q=wallpaper", nil)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Clean Non-AI Pin") {
+		t.Fatalf("expected default Less AI ON search result, got code=%d body=%s", res.Code, res.Body.String())
+	}
+	if (!strings.Contains(res.Body.String(), `/search/pins/?q=wallpaper&filter_genai=false`) &&
+		!strings.Contains(res.Body.String(), `/search/pins/?q=wallpaper&amp;filter_genai=false`)) ||
+		!strings.Contains(res.Body.String(), `class="guide-chip active"`) {
+		t.Fatalf("expected active Less AI toggle chip linking to filter_genai=false in:\n%s", res.Body.String())
+	}
+
+	// 2. Toggle OFF explicitly -> returns unfiltered results and sets flinternet_less_ai=0 cookie.
+	res = doRequest(t, h, http.MethodGet, "/search/pins/?q=wallpaper&filter_genai=false", nil)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Unfiltered Pin") {
+		t.Fatalf("expected Less AI OFF result, got code=%d", res.Code)
+	}
+	var savedCookie *http.Cookie
+	for _, c := range res.Result().Cookies() {
+		if c.Name == lessAICookieName {
+			savedCookie = c
+		}
+	}
+	if savedCookie == nil || savedCookie.Value != "0" {
+		t.Fatalf("expected flinternet_less_ai=0 cookie, got %+v", savedCookie)
+	}
+	if !strings.Contains(res.Body.String(), `/search/pins/?q=wallpaper&filter_genai=true`) &&
+		!strings.Contains(res.Body.String(), `/search/pins/?q=wallpaper&amp;filter_genai=true`) {
+		t.Fatalf("expected inactive Less AI toggle chip linking to filter_genai=true in:\n%s", res.Body.String())
+	}
+
+	// 3. Subsequent search carrying cookie remembers Less AI = OFF without needing ?filter_genai in URL.
+	reqWithCookie := httptest.NewRequest(http.MethodGet, "/search/pins/?q=mountains", nil)
+	reqWithCookie.AddCookie(&http.Cookie{Name: lessAICookieName, Value: "0"})
+	recCookie := httptest.NewRecorder()
+	h.ServeHTTP(recCookie, reqWithCookie)
+	if recCookie.Code != http.StatusOK || !strings.Contains(recCookie.Body.String(), "Unfiltered Pin") {
+		t.Fatalf("expected cookie preference to keep Less AI OFF, got code=%d body=%s", recCookie.Code, recCookie.Body.String())
+	}
+
+	// 4. Toggle back ON explicitly -> sets flinternet_less_ai=1 cookie.
+	res = doRequest(t, h, http.MethodGet, "/search/pins/?q=mountains&filter_genai=true", nil)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Clean Non-AI Pin") {
+		t.Fatalf("expected Less AI ON after toggling back on")
+	}
+	var onCookie *http.Cookie
+	for _, c := range res.Result().Cookies() {
+		if c.Name == lessAICookieName {
+			onCookie = c
+		}
+	}
+	if onCookie == nil || onCookie.Value != "1" {
+		t.Fatalf("expected flinternet_less_ai=1 cookie, got %+v", onCookie)
+	}
+
+	want := []bool{true, false, false, true}
+	if len(seenFilterGenAI) != len(want) {
+		t.Fatalf("unexpected upstream filter_genai sequence: got %v, want %v", seenFilterGenAI, want)
+	}
+	for i := range want {
+		if seenFilterGenAI[i] != want[i] {
+			t.Fatalf("step %d upstream filter_genai=%v, want %v", i, seenFilterGenAI[i], want[i])
+		}
+	}
+}

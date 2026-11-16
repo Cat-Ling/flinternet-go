@@ -47,6 +47,7 @@ type pageBase struct {
 	Version       string
 	Query         string
 	Scope         string
+	FilterGenAI   bool
 	Tabs          []pinterest.SearchTab
 	HasVideo      bool
 	IsSafari      bool
@@ -374,9 +375,46 @@ func (s *Server) handleSearchPage(w http.ResponseWriter, r *http.Request, scope 
 	s.handleSearchPageWithQuery(w, r, q, scope)
 }
 
+func applyLessAITabs(tabs []pinterest.SearchTab, query, scope string, active bool) []pinterest.SearchTab {
+	out := make([]pinterest.SearchTab, 0, len(tabs)+1)
+	found := false
+	for _, tab := range tabs {
+		t := tab
+		if t.IsGenAIFilter || strings.EqualFold(t.Label, "Less AI") {
+			t.IsGenAIFilter = true
+			t.IsSelected = active
+			t.FilterGenAI = !active
+			if t.Query == "" {
+				t.Query = query
+			}
+			if t.Scope == "" {
+				t.Scope = scope
+			}
+			found = true
+		}
+		out = append(out, t)
+	}
+	if !found {
+		lessTab := pinterest.SearchTab{
+			Label:         "Less AI",
+			Query:         query,
+			Scope:         scope,
+			IsGenAIFilter: true,
+			FilterGenAI:   !active,
+			IsSelected:    active,
+		}
+		out = append([]pinterest.SearchTab{lessTab}, out...)
+	}
+	return out
+}
+
 func (s *Server) handleSearchPageWithQuery(w http.ResponseWriter, r *http.Request, query, scope string) {
 	scope = mapWebScope(scope)
 	bookmark := r.URL.Query().Get("bookmark")
+	filterGenAI := false
+	if scope == string(pinterest.ScopePins) {
+		filterGenAI = resolveLessAIPref(w, r)
+	}
 	allowUnverified := true
 	if rawAllow := r.URL.Query().Get("allow_unverified"); rawAllow != "" {
 		allowUnverified = parseBoolParam(rawAllow)
@@ -386,16 +424,18 @@ func (s *Server) handleSearchPageWithQuery(w http.ResponseWriter, r *http.Reques
 		Query:           query,
 		Scope:           pinterest.SearchScope(scope),
 		Bookmark:        bookmark,
+		FilterGenAI:     filterGenAI,
 		AllowUnverified: &allowUnverified,
 	}
 
 	data := searchPageData{
 		pageBase: pageBase{
-			Version:  Version,
-			Query:    query,
-			Scope:    scope,
-			IsSafari: isSafariRequest(r),
-			OgTitle:  fmt.Sprintf("%s | Flinternet", query),
+			Version:     Version,
+			Query:       query,
+			Scope:       scope,
+			FilterGenAI: filterGenAI,
+			IsSafari:    isSafariRequest(r),
+			OgTitle:     fmt.Sprintf("%s | Flinternet", query),
 		},
 	}
 
@@ -435,7 +475,7 @@ func (s *Server) handleSearchPageWithQuery(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		data.Pins = page.Results
-		data.Tabs = page.Tabs
+		data.Tabs = applyLessAITabs(page.Tabs, query, scope, filterGenAI)
 		data.Bookmark = page.Bookmark
 		data.HasVideo = pinsHaveVideo(page.Results)
 		data.PinTokens = s.buildPinTokens(page.Results)

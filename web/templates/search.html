@@ -51,7 +51,7 @@
 
   {{if .Bookmark}}
   <div class="pagination-wrap">
-    <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}&bookmark={{urlquery .Bookmark}}" class="load-more">Next page</a>
+    <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}{{if eq .Scope "pins"}}&filter_genai={{if .FilterGenAI}}true{{else}}false{{end}}{{end}}&bookmark={{urlquery .Bookmark}}" class="load-more">Next page</a>
   </div>
   {{end}}
 

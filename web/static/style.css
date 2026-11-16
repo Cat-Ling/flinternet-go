@@ -184,6 +184,13 @@ a {
   color: var(--text);
 }
 
+.guide-chip.active {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
 /* Home Hero */
 .home-hero {
   flex: 1;
