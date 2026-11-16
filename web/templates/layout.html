@@ -118,7 +118,7 @@
         {{if .IsVideo}}
           <div class="video-container paused" data-pin-id="{{.ID}}">
             <video playsinline preload="metadata"
-              poster="{{if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
+              poster="{{if .ThumbnailURL}}{{.ThumbnailURL | proxyURL}}{{else if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
               data-src="{{if .HLSVideoURL}}{{.HLSVideoURL | proxyURL}}{{else}}{{.VideoURL | proxyURL}}{{end}}"
               {{if .MP4VideoURL}}data-mp4="{{.MP4VideoURL | proxyURL}}"{{end}}
               muted>
@@ -144,7 +144,7 @@
           <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="image-wrapper">
             <img loading="lazy"
               {{if and .Width .Height}}width="{{.Width}}" height="{{.Height}}"{{end}}
-              src="{{if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
+              src="{{if .ThumbnailURL}}{{.ThumbnailURL | proxyURL}}{{else if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
               alt="{{if .AltText}}{{.AltText}}{{else if .Title}}{{.Title}}{{else}}Pinterest Pin{{end}}"
               onload="this.closest('.post-media')?.classList.add('is-loaded');if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()"
               onerror="this.closest('.post-media')?.classList.add('is-loaded')">

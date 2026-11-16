@@ -79,6 +79,8 @@ type Pin struct {
 	ProxyImageURL         string                  `json:"proxy_image_url,omitempty"`
 	FallbackImageURL      string                  `json:"fallback_image_url,omitempty"`
 	ProxyFallbackImageURL string                  `json:"proxy_fallback_image_url,omitempty"`
+	ThumbnailURL          string                  `json:"thumbnail_url,omitempty"`
+	ProxyThumbnailURL     string                  `json:"proxy_thumbnail_url,omitempty"`
 	IsHEIC                bool                    `json:"is_heic,omitempty"`
 	Width                 int                     `json:"width,omitempty"`
 	Height                int                     `json:"height,omitempty"`
@@ -550,6 +552,53 @@ func bestNonHEICVariant(images map[string]ImageVariant) (ImageVariant, bool) {
 	return ImageVariant{}, false
 }
 
+// BestThumbnailVariant dynamically picks the highest-resolution non-orig thumbnail
+// available (preferring non-HEIC formats) without hardcoding specific tier names,
+// falling back to BestImageVariant only when no non-orig thumbnail exists.
+func BestThumbnailVariant(images map[string]ImageVariant) (ImageVariant, bool) {
+	if len(images) == 0 {
+		return ImageVariant{}, false
+	}
+	type candidate struct {
+		key     string
+		variant ImageVariant
+	}
+	pickBest := func(allowHEIC bool) (ImageVariant, bool) {
+		var thumbs []candidate
+		for k, v := range images {
+			if k == "orig" || v.URL == "" {
+				continue
+			}
+			if !allowHEIC && isHEICURL(v.URL) {
+				continue
+			}
+			thumbs = append(thumbs, candidate{key: k, variant: v})
+		}
+		if len(thumbs) == 0 {
+			return ImageVariant{}, false
+		}
+		sort.Slice(thumbs, func(i, j int) bool {
+			wi, wj := thumbs[i].variant.Width, thumbs[j].variant.Width
+			if wi != wj {
+				return wi > wj
+			}
+			hi, hj := thumbs[i].variant.Height, thumbs[j].variant.Height
+			if hi != hj {
+				return hi > hj
+			}
+			return thumbs[i].key > thumbs[j].key
+		})
+		return thumbs[0].variant, true
+	}
+	if v, ok := pickBest(false); ok {
+		return v, true
+	}
+	if v, ok := pickBest(true); ok {
+		return v, true
+	}
+	return BestImageVariant(images)
+}
+
 func normalizeDurationSeconds(raw float64) float64 {
 	if raw <= 0 {
 		return 0
@@ -825,6 +874,10 @@ func NormalizePin(raw json.RawMessage) (Pin, error) {
 				pin.ProxyFallbackImageURL = fb.ProxyURL
 			}
 		}
+		if thumb, ok := BestThumbnailVariant(images); ok {
+			pin.ThumbnailURL = thumb.URL
+			pin.ProxyThumbnailURL = thumb.ProxyURL
+		}
 		pin.Width = bestImg.Width
 		pin.Height = bestImg.Height
 	} else if hasVid && bestVid.Thumbnail != "" {
@@ -832,6 +885,8 @@ func NormalizePin(raw json.RawMessage) (Pin, error) {
 		pin.ProxyImageURL = bestVid.ProxyThumbnail
 		pin.FallbackImageURL = bestVid.Thumbnail
 		pin.ProxyFallbackImageURL = bestVid.ProxyThumbnail
+		pin.ThumbnailURL = bestVid.Thumbnail
+		pin.ProxyThumbnailURL = bestVid.ProxyThumbnail
 		pin.Width = bestVid.Width
 		pin.Height = bestVid.Height
 	}

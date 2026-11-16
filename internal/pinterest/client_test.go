@@ -161,6 +161,18 @@ func TestSearchScopesAndPagination(t *testing.T) {
 	if page.Results[0].ImageURL != "https://i.pinimg.com/originals/a.jpg" {
 		t.Fatalf("expected best orig image URL, got %q", page.Results[0].ImageURL)
 	}
+	if page.Results[0].ThumbnailURL != "https://i.pinimg.com/236x/a.jpg" || page.Results[0].ProxyThumbnailURL == "" {
+		t.Fatalf("expected best non-orig thumbnail URL 236x, got %q", page.Results[0].ThumbnailURL)
+	}
+	if bestThumb, ok := BestThumbnailVariant(map[string]ImageVariant{
+		"orig":   {URL: "https://i.pinimg.com/originals/x.jpg", Width: 2000, Height: 3000},
+		"236x":   {URL: "https://i.pinimg.com/236x/x.jpg", Width: 236, Height: 354},
+		"474x":   {URL: "https://i.pinimg.com/474x/x.jpg", Width: 474, Height: 711},
+		"custom": {URL: "https://i.pinimg.com/custom/x.jpg", Width: 736, Height: 1104},
+		"heic":   {URL: "https://i.pinimg.com/900x/x.heic", Width: 900, Height: 1350},
+	}); !ok || bestThumb.URL != "https://i.pinimg.com/custom/x.jpg" {
+		t.Fatalf("expected highest-width non-orig non-heic thumbnail dynamically, got %+v ok=%v", bestThumb, ok)
+	}
 	if page.Results[0].ProxyImageURL == "" {
 		t.Fatalf("expected non-empty proxy image URL")
 	}

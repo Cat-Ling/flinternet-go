@@ -275,6 +275,17 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 		}
 	}
 
+	searchGridHTML := doRequest(t, h, http.MethodGet, "/search/pins/?q=cabin", nil).Body.String()
+	_, gridMain, _ := strings.Cut(searchGridHTML, "<main>")
+	if !strings.Contains(gridMain, "%2F236x%2Fcabin.jpg") || strings.Contains(gridMain, "%2Foriginals%2Fcabin.jpg") {
+		t.Fatalf("expected search grid to render thumbnail 236x instead of originals")
+	}
+	cabinTok := extractPinSnapshotToken(t, searchGridHTML, "e1_pin-101")
+	cabinPinHTML := doRequest(t, h, http.MethodGet, "/pin/e1_pin-101/?p="+cabinTok, nil).Body.String()
+	if !strings.Contains(cabinPinHTML, "%2Foriginals%2Fcabin.jpg") {
+		t.Fatalf("expected pin detail page to render full originals image")
+	}
+
 	homeHTML := doRequest(t, h, http.MethodGet, "/", nil).Body.String()
 	for _, unwanted := range []string{"REST API Catalog", "Anonymous Read-Only Guest Client", "Brutalist Architecture"} {
 		if strings.Contains(homeHTML, unwanted) {
