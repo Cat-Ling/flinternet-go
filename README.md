@@ -47,6 +47,7 @@ Every CLI flag can be configured via environment variables (see `.env.example`):
 | `-cache-ttl` | `FLINTERNET_CACHE_TTL` | `5m` | In-memory cache TTL |
 | `-app-version` | `FLINTERNET_APP_VERSION` | `""` | Optional `X-App-Version` header |
 | `-allow-unverified-pagination` | `FLINTERNET_ALLOW_UNVERIFIED_PAGINATION` | `true` | Allow best-effort cursor continuations |
+| `-share-key` | `FLINTERNET_SHARE_KEY` | `""` | Secret key enabling encrypted pin correlation tokens (empty disables correlation) |
 | `-log-level` | `FLINTERNET_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
 ## License

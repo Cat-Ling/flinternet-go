@@ -39,4 +39,9 @@ func TestEnvHelpers(t *testing.T) {
 	if parseLogLevel("DEBUG") != slog.LevelDebug || parseLogLevel("warn") != slog.LevelWarn || parseLogLevel("error") != slog.LevelError || parseLogLevel("unknown") != slog.LevelInfo {
 		t.Fatalf("unexpected log level mapping")
 	}
+
+	t.Setenv("FLINTERNET_SHARE_KEY", "  my-secret-key  ")
+	if got := envOrDefault("FLINTERNET_SHARE_KEY", ""); got != "my-secret-key" {
+		t.Fatalf("expected trimmed FLINTERNET_SHARE_KEY, got %q", got)
+	}
 }

@@ -26,6 +26,7 @@ func main() {
 		cacheTTL                  = flag.Duration("cache-ttl", envDurationOrDefault("FLINTERNET_CACHE_TTL", 5*time.Minute), "In-memory response cache TTL (env: FLINTERNET_CACHE_TTL)")
 		appVersion                = flag.String("app-version", envOrDefault("FLINTERNET_APP_VERSION", ""), "Optional X-App-Version header (env: FLINTERNET_APP_VERSION)")
 		allowUnverifiedPagination = flag.Bool("allow-unverified-pagination", envBoolOrDefault("FLINTERNET_ALLOW_UNVERIFIED_PAGINATION", true), "Allow best-effort unverified search/feed cursor continuations (env: FLINTERNET_ALLOW_UNVERIFIED_PAGINATION)")
+		shareKey                  = flag.String("share-key", envOrDefault("FLINTERNET_SHARE_KEY", ""), "Secret key enabling privacy-preserving encrypted pin correlation tokens (env: FLINTERNET_SHARE_KEY)")
 		logLevel                  = flag.String("log-level", envOrDefault("FLINTERNET_LOG_LEVEL", "info"), "Log level: debug, info, warn, error (env: FLINTERNET_LOG_LEVEL)")
 	)
 	flag.Parse()
@@ -59,6 +60,7 @@ func main() {
 		StaticFS:    staticFS,
 		TemplatesFS: templatesFS,
 		CacheTTL:    *cacheTTL,
+		ShareKey:    *shareKey,
 		Logger:      logger,
 	})
 	if err != nil {

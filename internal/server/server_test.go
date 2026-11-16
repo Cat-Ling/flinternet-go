@@ -21,6 +21,10 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func newTestServer(t *testing.T) (*Server, *int) {
+	return newTestServerWithShareKey(t, "")
+}
+
+func newTestServerWithShareKey(t *testing.T, shareKey string) (*Server, *int) {
 	t.Helper()
 	upstreamCalls := 0
 
@@ -80,7 +84,7 @@ func newTestServer(t *testing.T) (*Server, *int) {
 			_, _ = rec.WriteString(`{"resource_response":{"status":"success","data":{"id":"brd-9","name":"Cabins","url":"/nordicstudio/cabins/","pin_count":42}}}`)
 		case "/resource/BoardFeedResource/get/":
 			rec.Header().Set("Content-Type", "application/json")
-			_, _ = rec.WriteString(`{"resource_response":{"status":"success","data":[{"id":"pin-404","title":"A-Frame","images":{"orig":{"url":"https://i.pinimg.com/originals/aframe.jpg","width":1000,"height":1400}}}]}}`)
+			_, _ = rec.WriteString(`{"resource_response":{"status":"success","data":[{"id":"e1_pin-404","title":"A-Frame","images":{"orig":{"url":"https://i.pinimg.com/originals/aframe.jpg","width":1000,"height":1400}}}]}}`)
 		case "/resource/PinResource/get/":
 			rec.Header().Set("Content-Type", "application/json")
 			_, _ = rec.WriteString(`{"resource_response":{"status":"success","data":{"id":"pin-999","title":"Nordic Lamp","description":"Warm birch pendant","reaction_counts":{"1":12},"repin_count":40,"aggregated_pin_data":{"id":"agg-999","aggregated_stats":{"saves":88,"comments":1}},"pinner":{"username":"nordicstudio","full_name":"Nordic Studio"},"board":{"id":"brd-9","name":"Cabins","url":"/nordicstudio/cabins/"},"images":{"orig":{"url":"https://i.pinimg.com/originals/lamp.jpg","width":900,"height":1200}}}}}`)
@@ -89,7 +93,7 @@ func newTestServer(t *testing.T) (*Server, *int) {
 			_, _ = rec.WriteString(`{"resource_response":{"status":"success","data":[{"id":"c1","type":"aggregatedcomment","text":"Love the birch shade","like_count":3,"user":{"first_name":"Sam","username":"sam"}}]}}`)
 		case "/resource/BestPinsFeedAltResource/get/":
 			rec.Header().Set("Content-Type", "application/json")
-			_, _ = rec.WriteString(`{"resource_response":{"status":"success","bookmark":"ideas-next","data":[{"id":"pin-505","title":"Nordic Idea","images":{"orig":{"url":"https://i.pinimg.com/originals/idea.jpg","width":800,"height":1000}}}]}}`)
+			_, _ = rec.WriteString(`{"resource_response":{"status":"success","bookmark":"ideas-next","data":[{"id":"e1_pin-505","title":"Nordic Idea","images":{"orig":{"url":"https://i.pinimg.com/originals/idea.jpg","width":800,"height":1000}}}]}}`)
 		default:
 			rec.WriteHeader(http.StatusNotFound)
 		}
@@ -119,6 +123,7 @@ func newTestServer(t *testing.T) (*Server, *int) {
 		StaticFS:    staticFS,
 		TemplatesFS: tmplFS,
 		CacheTTL:    time.Minute,
+		ShareKey:    shareKey,
 	})
 	if err != nil {
 		t.Fatalf("server.New failed: %v", err)
@@ -151,10 +156,11 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 		t.Fatalf("unexpected endpoints response: %d %s", res.Code, res.Body.String())
 	}
 
-	// Cold-cache refresh of an e1_ search pin with ?q=&s= rehydrates without 404.
+	// Without a ShareKey, cold-cache e1_ pins must NOT hit Pinterest or correlate via ?q=.
+	callsBeforeCold := *upstreamCalls
 	res = doRequest(t, h, http.MethodGet, "/pin/e1_pin-101/?q=cabin-cold&s=pins", nil)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "Nordic Cabin") {
-		t.Fatalf("cold e1_ pin refresh failed: %d", res.Code)
+	if res.Code != http.StatusNotFound || *upstreamCalls != callsBeforeCold {
+		t.Fatalf("expected 404 with 0 upstream calls when ShareKey disabled, got code=%d calls=%d", res.Code, *upstreamCalls-callsBeforeCold)
 	}
 
 	// Search GET + cache verification
@@ -220,11 +226,11 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 		t.Fatalf("board metadata failed: %d %s", res.Code, res.Body.String())
 	}
 	res = doRequest(t, h, http.MethodGet, "/api/v1/boards/nordicstudio/cabins/pins", nil)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"pin-404"`) {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"e1_pin-404"`) {
 		t.Fatalf("board pins failed: %d %s", res.Code, res.Body.String())
 	}
 	res = doRequest(t, h, http.MethodGet, "/api/v1/board-feed?board_id=brd-9", nil)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"pin-404"`) {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"e1_pin-404"`) {
 		t.Fatalf("board-feed failed: %d %s", res.Code, res.Body.String())
 	}
 
@@ -238,7 +244,7 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 		t.Fatalf("pin comments API failed: %d %s", res.Code, res.Body.String())
 	}
 	res = doRequest(t, h, http.MethodGet, "/api/v1/ideas/nordic-design/908182459161", nil)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"pin-505"`) {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"e1_pin-505"`) {
 		t.Fatalf("ideas API failed: %d %s", res.Code, res.Body.String())
 	}
 
@@ -316,8 +322,77 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected SSRF URL to be rejected with 400, got %d %s", res.Code, res.Body.String())
 	}
+	// Ensure ShareKey disabled produces clean /pin/<id>/ links without ?c= or ?q=.
+	searchHTMLNoKey := doRequest(t, h, http.MethodGet, "/search/pins/?q=cabin", nil).Body.String()
+	if strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?c=") || strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?q=") {
+		t.Fatalf("unexpected correlation query on /pin/ link when ShareKey is empty")
+	}
+
 	res = doRequest(t, h, http.MethodGet, "/api/v1/does-not-exist", nil)
 	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), `"NOT_FOUND"`) {
 		t.Fatalf("expected JSON 404 for unknown API route, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestShareKeyCorrelationAcrossRestarts(t *testing.T) {
+	srv1, _ := newTestServerWithShareKey(t, "test-secret-key-2026")
+	h1 := srv1.Handler()
+
+	extractToken := func(htmlBody, pinID string) string {
+		marker := "/pin/" + pinID + "/?c="
+		idx := strings.Index(htmlBody, marker)
+		if idx < 0 {
+			t.Fatalf("expected encrypted ?c= link for %s", pinID)
+		}
+		rest := htmlBody[idx+len(marker):]
+		end := strings.IndexAny(rest, `"'&<`)
+		if end < 0 {
+			return rest
+		}
+		return rest[:end]
+	}
+
+	searchHTML := doRequest(t, h1, http.MethodGet, "/search/pins/?q=cabin", nil).Body.String()
+	if strings.Contains(searchHTML, "/pin/e1_pin-101/?q=") {
+		t.Fatalf("plaintext search query leaked onto pin link")
+	}
+	searchTok := extractToken(searchHTML, "e1_pin-101")
+
+	boardHTML := doRequest(t, h1, http.MethodGet, "/nordicstudio/cabins/", nil).Body.String()
+	boardTok := extractToken(boardHTML, "e1_pin-404")
+
+	ideasHTML := doRequest(t, h1, http.MethodGet, "/ideas/nordic-design/908182459161/", nil).Body.String()
+	ideasTok := extractToken(ideasHTML, "e1_pin-505")
+
+	// Simulate fresh server restart with empty caches and same ShareKey.
+	srv2, upstream2 := newTestServerWithShareKey(t, "test-secret-key-2026")
+	h2 := srv2.Handler()
+
+	// Cross-pin, tampered, and missing tokens on a cold cache must reject with 404 and 0 upstream calls.
+	for _, badPath := range []string{
+		"/pin/e1_pin-101/?c=" + boardTok,
+		"/pin/e1_pin-101/?c=invalid-token",
+		"/pin/e1_pin-101/",
+	} {
+		res := doRequest(t, h2, http.MethodGet, badPath, nil)
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 for %q, got %d", badPath, res.Code)
+		}
+	}
+	if *upstream2 != 0 {
+		t.Fatalf("expected 0 upstream calls for rejected tokens, got %d", *upstream2)
+	}
+
+	for _, tc := range []struct {
+		id, tok, wantTitle string
+	}{
+		{"e1_pin-101", searchTok, "Nordic Cabin"},
+		{"e1_pin-404", boardTok, "A-Frame"},
+		{"e1_pin-505", ideasTok, "Nordic Idea"},
+	} {
+		res := doRequest(t, h2, http.MethodGet, "/pin/"+tc.id+"/?c="+tc.tok, nil)
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), tc.wantTitle) {
+			t.Fatalf("correlated restart lookup failed for %s: code=%d", tc.id, res.Code)
+		}
 	}
 }
