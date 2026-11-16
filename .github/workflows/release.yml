@@ -2,137 +2,162 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
     tags:
-      - 'v*'
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'assets/**'
-      - 'Dockerfile'
-      - 'docker-compose.yml'
-      - '.github/workflows/release.yml'
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string override (e.g. 1.0.1)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
-  build-binaries:
-    name: Build Binary
-    if: startsWith(github.ref, 'refs/tags/v')
+  test:
+    name: Verify Tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, windows, darwin]
-        goarch: [amd64, arm64]
-        exclude:
-          - goos: windows
-            goarch: arm64 # Optional: exclude if not needed, but keep standard targets
     steps:
-      - name: Checkout Source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
           cache: true
 
-      - name: Build Binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      - name: Run go vet & tests
         run: |
-          BINARY_NAME="flinternet-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME="${BINARY_NAME}.exe"
-          fi
-          go build -trimpath -ldflags="-s -w" -o "dist/${BINARY_NAME}" cmd/server/main.go
+          go vet ./...
+          go test -count=1 -race ./...
 
-      - name: Package Binary
-        run: |
-          cd dist
-          BINARY_FILE=$(ls)
-          PACKAGE_NAME="${BINARY_FILE%.*}"
-          if [[ "${{ matrix.goos }}" == "windows" ]]; then
-            zip "${PACKAGE_NAME}.zip" "${BINARY_FILE}"
-            rm "${BINARY_FILE}"
-          else
-            tar -czvf "${PACKAGE_NAME}.tar.gz" "${BINARY_FILE}"
-            rm "${BINARY_FILE}"
-          fi
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: assets-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
-          retention-days: 1
-
-  github-release:
-    name: Create GitHub Release
-    needs: build-binaries
-    if: startsWith(github.ref, 'refs/tags/v')
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.label }})
+    needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, goarm: "", label: amd64, ext: "" }
+          - { goos: linux, goarch: arm64, goarm: "", label: arm64, ext: "" }
+          - { goos: linux, goarch: "386", goarm: "", label: "386", ext: "" }
+          - { goos: linux, goarch: arm, goarm: "7", label: armv7, ext: "" }
+          - { goos: linux, goarch: arm, goarm: "6", label: armv6, ext: "" }
+          - { goos: linux, goarch: riscv64, goarm: "", label: riscv64, ext: "" }
+          - { goos: linux, goarch: loong64, goarm: "", label: loong64, ext: "" }
+          - { goos: linux, goarch: ppc64le, goarm: "", label: ppc64le, ext: "" }
+          - { goos: linux, goarch: ppc64, goarm: "", label: ppc64, ext: "" }
+          - { goos: linux, goarch: s390x, goarm: "", label: s390x, ext: "" }
+          - { goos: linux, goarch: mips64le, goarm: "", label: mips64le, ext: "" }
+          - { goos: linux, goarch: mips64, goarm: "", label: mips64, ext: "" }
+          - { goos: linux, goarch: mipsle, goarm: "", label: mipsle, ext: "" }
+          - { goos: linux, goarch: mips, goarm: "", label: mips, ext: "" }
+          - { goos: darwin, goarch: amd64, goarm: "", label: amd64, ext: "" }
+          - { goos: darwin, goarch: arm64, goarm: "", label: arm64, ext: "" }
+          - { goos: windows, goarch: amd64, goarm: "", label: amd64, ext: ".exe" }
+          - { goos: windows, goarch: arm64, goarm: "", label: arm64, ext: ".exe" }
+          - { goos: windows, goarch: "386", goarm: "", label: "386", ext: ".exe" }
+          - { goos: freebsd, goarch: amd64, goarm: "", label: amd64, ext: "" }
+          - { goos: freebsd, goarch: arm64, goarm: "", label: arm64, ext: "" }
+          - { goos: freebsd, goarch: "386", goarm: "", label: "386", ext: "" }
+          - { goos: freebsd, goarch: arm, goarm: "7", label: armv7, ext: "" }
+          - { goos: openbsd, goarch: amd64, goarm: "", label: amd64, ext: "" }
+          - { goos: openbsd, goarch: arm64, goarm: "", label: arm64, ext: "" }
+          - { goos: openbsd, goarch: "386", goarm: "", label: "386", ext: "" }
+          - { goos: openbsd, goarch: arm, goarm: "7", label: armv7, ext: "" }
+          - { goos: netbsd, goarch: amd64, goarm: "", label: amd64, ext: "" }
+          - { goos: netbsd, goarch: arm64, goarm: "", label: arm64, ext: "" }
+          - { goos: netbsd, goarch: "386", goarm: "", label: "386", ext: "" }
+          - { goos: netbsd, goarch: arm, goarm: "7", label: armv7, ext: "" }
+
     steps:
-      - name: Checkout Source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Artifacts
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Determine version
+        id: meta
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            ver="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            ver="${GITHUB_SHA::7}"
+          fi
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & package archive
+        run: |
+          ver="${{ steps.meta.outputs.version }}"
+          pkg="flinternet_${ver}_${{ matrix.goos }}_${{ matrix.label }}"
+          stage="dist/${pkg}"
+          mkdir -p "${stage}"
+          bin_name="flinternet${{ matrix.ext }}"
+
+          export CGO_ENABLED=0
+          export GOOS="${{ matrix.goos }}"
+          export GOARCH="${{ matrix.goarch }}"
+          if [ -n "${{ matrix.goarm }}" ]; then
+            export GOARM="${{ matrix.goarm }}"
+          fi
+
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/flinternet/flinternet/internal/server.Version=${ver}" \
+            -o "${stage}/${bin_name}" ./cmd/flinternet
+
+          cp LICENSE README.md .env.example "${stage}/"
+
+          mkdir -p upload
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            (cd dist && zip -qr "../upload/${pkg}.zip" "${pkg}")
+          else
+            tar -C dist -czf "upload/${pkg}.tar.gz" "${pkg}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.label }}
+          path: upload/*
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Release Assets
+      - name: Generate SHA-256 checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz *.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Upload combined artifacts (manual dispatch)
+        if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: flinternet-all-platforms
+          path: artifacts/*
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+          generate_release_notes: true
           draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  docker-release:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Source
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker Metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/cat-ling/binternet-go
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          prerelease: ${{ contains(github.ref_name, '-') }}

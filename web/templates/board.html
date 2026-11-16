@@ -1,0 +1,36 @@
+{{template "header.html" .}}
+<title>{{if .Board.Name}}{{.Board.Name}}{{else}}{{.Slug}}{{end}} - @{{.Username}} | Flinternet</title>
+</head>
+<body>
+  {{template "nav.html" .}}
+
+  <main class="container">
+    <section class="board-banner">
+      <div>
+        <h1>{{if .Board.Name}}{{.Board.Name}}{{else}}{{.Slug}}{{end}}</h1>
+        <p>
+          by <a href="/{{.Username}}/" style="color: var(--text); text-decoration: underline;">@{{.Username}}</a>
+          {{if .Board.Category}} &middot; {{.Board.Category}}{{end}}
+          {{if .Board.Description}} &mdash; {{.Board.Description}}{{end}}
+        </p>
+      </div>
+      <div class="pin-stats-grid">
+        <span class="stat-chip"><strong>{{.Board.PinCount}}</strong> pins</span>
+        {{if .Board.FollowerCount}}<span class="stat-chip"><strong>{{.Board.FollowerCount | formatCount}}</strong> followers</span>{{end}}
+      </div>
+    </section>
+
+    {{if .Pins}}
+      {{template "pin_grid.html" .}}
+    {{else}}
+      <p style="text-align: center; padding: 3rem 1rem; color: var(--text-dim);">No pins found in this board.</p>
+    {{end}}
+
+    {{if .Bookmark}}
+      <div class="pagination-wrap">
+        <a href="/{{.Username}}/{{.Slug}}/?bookmark={{urlquery .Bookmark}}" class="load-more">Next page</a>
+      </div>
+    {{end}}
+  </main>
+
+{{template "footer.html" .}}

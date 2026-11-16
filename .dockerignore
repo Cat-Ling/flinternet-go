@@ -1,0 +1,9 @@
+.git
+.github
+bin
+dist
+coverage.out
+.env
+docker-compose*.yml
+README.md
+LICENSE

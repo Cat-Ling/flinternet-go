@@ -1,0 +1,200 @@
+{{template "header.html" .}}
+<title>{{if .Pin.Title}}{{.Pin.Title}}{{else if .Pin.SEOTitle}}{{.Pin.SEOTitle}}{{else if .Pin.Pinner.FullName}}Pin by {{.Pin.Pinner.FullName}}{{else}}Pin #{{.Pin.ID}}{{end}} | Flinternet</title>
+</head>
+<body class="pin-page">
+  {{template "nav.html" .}}
+
+  <main class="pin-container">
+    <div class="pin-split-view">
+      <!-- Left Column: Full Media / Video Player -->
+      <div class="pin-media-column">
+        {{if .Pin.IsVideo}}
+          <div class="pin-media-frame{{if and .Pin.Width .Pin.Height}} has-aspect{{end}}"{{if and .Pin.Width .Pin.Height}} data-aspect-locked="1" style="--w: {{.Pin.Width}}; --h: {{.Pin.Height}};"{{end}}>
+            <div class="video-container paused" data-autoload="true">
+              <video playsinline loop muted
+                poster="{{if .IsSafari}}{{.Pin.ImageURL | proxyURL}}{{else}}{{.Pin.FallbackImageURL | proxyURL}}{{end}}"
+                data-src="{{if .Pin.HLSVideoURL}}{{.Pin.HLSVideoURL | proxyURL}}{{else}}{{.Pin.VideoURL | proxyURL}}{{end}}"
+                {{if .Pin.MP4VideoURL}}data-mp4="{{.Pin.MP4VideoURL | proxyURL}}"{{end}}>
+                Video playback requires a modern browser.
+              </video>
+              <div class="video-overlay">
+                <div class="play-pause-icon">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <div class="video-loader"></div>
+              <div class="video-controls-bottom">
+                <div class="mute-toggle" onclick="event.stopPropagation(); toggleMute(this);" title="Toggle Mute"></div>
+                <div class="fullscreen-toggle" onclick="event.stopPropagation(); toggleFullscreen(this);" title="Fullscreen">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                </div>
+              </div>
+              <div class="video-progress-container"><div class="video-progress-bar"></div></div>
+            </div>
+          </div>
+        {{else}}
+          <div class="pin-media-frame{{if and .Pin.Width .Pin.Height}} has-aspect{{end}}"{{if and .Pin.Width .Pin.Height}} data-aspect-locked="1" style="--w: {{.Pin.Width}}; --h: {{.Pin.Height}};"{{end}}>
+            <img
+              src="{{if .IsSafari}}{{.Pin.ImageURL | proxyURL}}{{else}}{{.Pin.FallbackImageURL | proxyURL}}{{end}}"
+              alt="{{if .Pin.AltText}}{{.Pin.AltText}}{{else if .Pin.Title}}{{.Pin.Title}}{{else}}Pinterest Pin{{end}}">
+          </div>
+        {{end}}
+      </div>
+
+      <!-- Right Column: Clean Action Strip, Attribution, Metadata & Comments -->
+      <div class="pin-info-column">
+        <div class="pin-action-toolbar">
+          <div class="pin-toolbar-metrics">
+            <a href="{{if .Query}}/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}{{else}}/{{end}}" class="back-link" title="Back" aria-label="Go back">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline>
+              </svg>
+            </a>
+            <span class="toolbar-metric" title="Likes">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              <span>{{.Pin.Likes | formatCount}}</span>
+            </span>
+            {{if .Pin.CommentCount}}
+              <a href="#pin-comments" class="toolbar-metric" title="Comments">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>{{.Pin.CommentCount | formatCount}}</span>
+              </a>
+            {{end}}
+            <button type="button" class="share-btn" style="margin-left: 0;" title="Copy Pin Link" data-share-title="{{if .Pin.Title}}{{.Pin.Title}}{{else if .Pin.RichTitle}}{{.Pin.RichTitle}}{{else}}Pinterest Pin{{end}}" onclick="handleShare(event, this)">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+            </button>
+          </div>
+
+          {{if .Pin.Link}}
+            <a href="{{.Pin.Link}}" target="_blank" rel="noopener noreferrer nofollow" class="pin-visit-btn">Visit &#8599;</a>
+          {{end}}
+        </div>
+
+        <div class="pin-author-row">
+          {{if .Pin.Pinner.Username}}
+            <a href="/{{.Pin.Pinner.Username}}/" class="author-avatar-link">
+              {{if .Pin.Pinner.AvatarURL}}
+                <img src="{{.Pin.Pinner.AvatarURL | proxyURL}}" class="author-avatar" alt="">
+              {{else}}
+                <div class="author-avatar-placeholder"></div>
+              {{end}}
+            </a>
+            <div style="min-width: 0;">
+              <a href="/{{.Pin.Pinner.Username}}/" class="author-name" style="display: block;">
+                {{if .Pin.Pinner.FullName}}{{.Pin.Pinner.FullName}}{{else}}@{{.Pin.Pinner.Username}}{{end}}
+              </a>
+              <span style="font-size: 0.78rem; color: var(--text-dim);">@{{.Pin.Pinner.Username}}</span>
+            </div>
+          {{else if .Pin.Pinner.FullName}}
+            {{if .Pin.Pinner.AvatarURL}}
+              <img src="{{.Pin.Pinner.AvatarURL | proxyURL}}" class="author-avatar" alt="">
+            {{else}}
+              <div class="author-avatar-placeholder"></div>
+            {{end}}
+            <span class="author-name">{{.Pin.Pinner.FullName}}</span>
+          {{else}}
+            <div class="author-avatar-placeholder"></div>
+            <span class="author-name">{{if .Pin.Domain}}{{.Pin.Domain}}{{else}}Pinterest Creator{{end}}</span>
+          {{end}}
+        </div>
+
+        {{if .Pin.Title}}
+          <h1 style="margin: 0; font-size: 1.35rem; line-height: 1.25;">{{.Pin.Title}}</h1>
+        {{else if .Pin.RichTitle}}
+          <h1 style="margin: 0; font-size: 1.35rem; line-height: 1.25;">{{.Pin.RichTitle}}</h1>
+        {{else if .Pin.SEOTitle}}
+          <h1 style="margin: 0; font-size: 1.35rem; line-height: 1.25;">{{.Pin.SEOTitle}}</h1>
+        {{else if .Pin.AltText}}
+          <h1 style="margin: 0; font-size: 1.35rem; line-height: 1.25;">{{.Pin.AltText}}</h1>
+        {{else if .Pin.Pinner.FullName}}
+          <h1 style="margin: 0; font-size: 1.35rem; line-height: 1.25;">Pin by {{.Pin.Pinner.FullName}}</h1>
+        {{end}}
+
+        {{if and .Pin.RichTitle .Pin.Title (ne .Pin.RichTitle .Pin.Title)}}
+          <p style="margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-dim);">{{.Pin.RichTitle}}{{if .Pin.SiteName}} &middot; {{.Pin.SiteName}}{{end}}</p>
+        {{end}}
+
+        {{if .Pin.Description}}
+          <p style="margin: 0; font-size: 0.94rem; color: var(--text-dim); white-space: pre-line;">{{.Pin.Description}}</p>
+        {{else if .Pin.RichDescription}}
+          <p style="margin: 0; font-size: 0.94rem; color: var(--text-dim); white-space: pre-line;">{{.Pin.RichDescription}}</p>
+        {{end}}
+
+        <!-- Engagement & Provenance Chips -->
+        <div class="pin-stats-grid">
+          <span class="stat-chip"><strong>{{.Pin.Likes | formatCount}}</strong> likes</span>
+          {{if .Pin.Saves}}<span class="stat-chip"><strong>{{.Pin.Saves | formatCount}}</strong> saves</span>{{end}}
+          {{if .Pin.Repins}}<span class="stat-chip"><strong>{{.Pin.Repins | formatCount}}</strong> repins</span>{{end}}
+          {{if .Pin.ShareCount}}<span class="stat-chip"><strong>{{.Pin.ShareCount | formatCount}}</strong> shares</span>{{end}}
+          {{if and .Pin.Width .Pin.Height}}<span class="stat-chip"><strong>{{.Pin.Width}}&times;{{.Pin.Height}}</strong></span>{{end}}
+          {{if .Pin.Duration}}<span class="stat-chip"><strong>{{.Pin.Duration | formatDuration}}</strong> duration</span>{{end}}
+          {{if .Pin.DominantColor}}
+            <span class="stat-chip"><span class="color-swatch" style="background:{{.Pin.DominantColor}}"></span><strong>{{.Pin.DominantColor}}</strong></span>
+          {{end}}
+          {{if .Pin.Link}}
+            <a href="{{.Pin.Link}}" target="_blank" rel="noopener noreferrer nofollow" class="stat-chip" style="border-color: var(--accent); color: var(--text);">
+              Source: <strong>{{if .Pin.Domain}}{{.Pin.Domain}}{{else}}External Link{{end}}</strong> &#8599;
+            </a>
+          {{else if .Pin.Domain}}
+            <span class="stat-chip">{{.Pin.Domain}}</span>
+          {{end}}
+        </div>
+
+        <!-- Parent Board Link -->
+        {{if and .Pin.Board.Username .Pin.Board.Slug}}
+          <a href="/{{.Pin.Board.Username}}/{{.Pin.Board.Slug}}/" class="pin-board-pill">
+            {{if .Pin.Board.CoverURL}}
+              <img src="{{.Pin.Board.CoverURL | proxyURL}}" class="pin-board-thumb" alt="">
+            {{end}}
+            <div>
+              <div style="font-size: 0.74rem; color: var(--text-dim);">Pinned to board</div>
+              <strong style="font-size: 0.92rem;">{{if .Pin.Board.Name}}{{.Pin.Board.Name}}{{else}}{{.Pin.Board.Slug}}{{end}}</strong>
+            </div>
+          </a>
+        {{end}}
+
+        <!-- Hashtags & Visual Annotations -->
+        {{if or .Pin.Hashtags .Pin.VisualTags}}
+          <div class="pin-tags">
+            {{range .Pin.Hashtags}}
+              <a href="/search/pins/?q={{urlquery .}}" class="guide-chip">{{.}}</a>
+            {{end}}
+            {{range .Pin.VisualTags}}
+              <a href="/search/pins/?q={{urlquery .}}" class="guide-chip">{{.}}</a>
+            {{end}}
+          </div>
+        {{end}}
+
+        <!-- Technical Pin Metadata -->
+        <details class="pin-depth-details">
+          <summary>Pin Details</summary>
+          <dl class="depth-kv">
+            <dt>Pin ID</dt><dd>{{.Pin.ID}}</dd>
+            {{if .Pin.AggregatedPinID}}<dt>Aggregated ID</dt><dd>{{.Pin.AggregatedPinID}}</dd>{{end}}
+            {{if .Pin.CreatedAt}}<dt>Created</dt><dd>{{.Pin.CreatedAt}}</dd>{{end}}
+            {{if .Pin.SEOTitle}}<dt>SEO Title</dt><dd>{{.Pin.SEOTitle}}</dd>{{end}}
+            {{if .Pin.AltText}}<dt>Alt Text</dt><dd>{{.Pin.AltText}}</dd>{{end}}
+          </dl>
+        </details>
+
+        <!-- Comments Section -->
+        <div class="comment-section" id="pin-comments">
+          <h3 class="comment-count-header">Comments {{if .Pin.CommentCount}}({{.Pin.CommentCount | formatCount}}){{end}}</h3>
+          {{if .Pin.CommentsDisabled}}
+            <p style="color: var(--text-dim); font-size: 0.88rem;">Comments are disabled for this pin.</p>
+          {{else}}
+            <iframe src="/pin/{{.Pin.ID}}/comments/{{if .Pin.AggregatedPinID}}?aid={{urlquery .Pin.AggregatedPinID}}{{end}}" class="comments-iframe" loading="lazy" title="Pin comments"></iframe>
+          {{end}}
+        </div>
+      </div>
+    </div>
+
+    {{if .RelatedPins}}
+      <section style="margin-top: 2.25rem;">
+        <h2 style="text-align: center; font-size: 1.25rem; margin-bottom: 1rem;">More like this</h2>
+        {{template "pin_grid.html" .RelatedGrid}}
+      </section>
+    {{end}}
+  </main>
+
+{{template "footer.html" .}}

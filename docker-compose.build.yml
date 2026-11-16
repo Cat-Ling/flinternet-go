@@ -1,0 +1,31 @@
+services:
+  flinternet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "${FLINTERNET_VERSION:-1.0.0}"
+    image: flinternet:local
+    container_name: flinternet
+    restart: unless-stopped
+    ports:
+      - "${FLINTERNET_PORT:-8080}:8080"
+    environment:
+      FLINTERNET_ADDR: ":8080"
+      FLINTERNET_BASE_URL: "${FLINTERNET_BASE_URL:-https://www.pinterest.com}"
+      FLINTERNET_TIMEOUT: "${FLINTERNET_TIMEOUT:-20s}"
+      FLINTERNET_CACHE_TTL: "${FLINTERNET_CACHE_TTL:-5m}"
+      FLINTERNET_APP_VERSION: "${FLINTERNET_APP_VERSION:-}"
+      FLINTERNET_ALLOW_UNVERIFIED_PAGINATION: "${FLINTERNET_ALLOW_UNVERIFIED_PAGINATION:-true}"
+      FLINTERNET_LOG_LEVEL: "${FLINTERNET_LOG_LEVEL:-info}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

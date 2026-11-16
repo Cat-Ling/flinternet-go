@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="referrer" content="no-referrer">
+  <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
+  <style>
+    body { background: transparent; padding: 0; margin: 0; min-height: auto; }
+  </style>
+</head>
+<body>
+  <div class="comment-section" style="border-top: none; padding-top: 0;">
+    {{if .RepliesFor}}
+      <div style="margin-bottom: 0.75rem;">
+        <a href="/pin/{{.PinID}}/comments/{{if .Aid}}?aid={{urlquery .Aid}}{{end}}" class="show-more-label">&larr; Back to comments</a>
+      </div>
+    {{end}}
+    {{if .Result.Comments}}
+      <div class="comments-list">
+        {{range .Result.Comments}}
+          <div class="comment-item">
+            {{if .AuthorAvatar}}
+              <img src="{{.AuthorAvatar | proxyURL}}" class="comment-avatar" alt="" loading="lazy">
+            {{else}}
+              <div class="comment-avatar-placeholder"></div>
+            {{end}}
+            <div class="comment-content">
+              <div>
+                {{if .AuthorUsername}}
+                  <a href="/{{.AuthorUsername}}/" target="_top"><strong>{{.AuthorName}}</strong></a>
+                {{else}}
+                  <strong>{{.AuthorName}}</strong>
+                {{end}}
+                {{if .CreatedAt}}<span class="comment-date">{{.CreatedAt}}</span>{{end}}
+              </div>
+              {{if .Text}}<div style="margin-top: 0.2rem;">{{.Text}}</div>{{end}}
+              {{if .Images}}
+                {{range .Images}}
+                  <a href="{{.URL | proxyURL}}" target="_top">
+                    <img src="{{.URL | proxyURL}}" class="comment-inline-image" alt="" loading="lazy">
+                  </a>
+                {{end}}
+              {{end}}
+              <div class="comment-actions">
+                {{if .Likes}}<span>{{.Likes}} likes</span>{{end}}
+                {{if .ReplyCount}}
+                  <a href="/pin/{{$.PinID}}/comments/?replies_for={{urlquery .ID}}{{if $.Aid}}&aid={{urlquery $.Aid}}{{end}}" style="color: var(--accent-soft);">{{.ReplyCount}} replies</a>
+                {{end}}
+              </div>
+            </div>
+          </div>
+        {{end}}
+      </div>
+
+      {{if .Result.Bookmark}}
+        <div class="pagination-wrap" style="padding: 1rem 0;">
+          {{if .RepliesFor}}
+            <a href="/pin/{{.PinID}}/comments/?replies_for={{urlquery .RepliesFor}}&bookmark={{urlquery .Result.Bookmark}}{{if .Aid}}&aid={{urlquery .Aid}}{{end}}" class="show-more-label">View more replies</a>
+          {{else}}
+            <a href="/pin/{{.PinID}}/comments/?bookmark={{urlquery .Result.Bookmark}}{{if .Aid}}&aid={{urlquery .Aid}}{{end}}" class="show-more-label">View more comments</a>
+          {{end}}
+        </div>
+      {{end}}
+    {{else}}
+      <p style="text-align: center; color: var(--text-dim); padding: 1.5rem 0;">No comments yet.</p>
+    {{end}}
+  </div>
+</body>
+</html>

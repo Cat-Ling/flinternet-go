@@ -1,0 +1,194 @@
+{{define "header.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#e60023">
+  <meta name="description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}Search public Pinterest pins, videos, boards, and creators without login walls.{{end}}">
+  {{if .OgURL}}<link rel="canonical" href="{{.OgURL}}">{{end}}
+  <meta property="og:site_name" content="Flinternet">
+  {{if .OgURL}}<meta property="og:url" content="{{.OgURL}}">{{end}}
+  <meta property="og:type" content="{{if .OgType}}{{.OgType}}{{else}}website{{end}}">
+  <meta property="og:title" content="{{if .OgTitle}}{{.OgTitle}}{{else}}Flinternet{{end}}">
+  <meta property="og:description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}Search public Pinterest pins, videos, boards, and creators without login walls.{{end}}">
+  {{if .OgImage}}<meta property="og:image" content="{{.OgImage}}">{{end}}
+  {{if and .OgImageWidth .OgImageHeight}}
+    <meta property="og:image:width" content="{{.OgImageWidth}}">
+    <meta property="og:image:height" content="{{.OgImageHeight}}">
+  {{end}}
+  {{if .OgImageAlt}}<meta property="og:image:alt" content="{{.OgImageAlt}}">{{end}}
+  {{if .OgVideo}}
+    <meta property="og:video" content="{{.OgVideo}}">
+    <meta property="og:video:type" content="video/mp4">
+    {{if and .OgVideoWidth .OgVideoHeight}}
+      <meta property="og:video:width" content="{{.OgVideoWidth}}">
+      <meta property="og:video:height" content="{{.OgVideoHeight}}">
+    {{end}}
+  {{end}}
+  <meta name="twitter:card" content="{{if .TwitterCard}}{{.TwitterCard}}{{else}}summary_large_image{{end}}">
+  <meta name="twitter:title" content="{{if .OgTitle}}{{.OgTitle}}{{else}}Flinternet{{end}}">
+  <meta name="twitter:description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}Search public Pinterest pins, videos, boards, and creators without login walls.{{end}}">
+  {{if .OgImage}}<meta name="twitter:image" content="{{.OgImage}}">{{end}}
+  {{if .OgImageAlt}}<meta name="twitter:image:alt" content="{{.OgImageAlt}}">{{end}}
+  <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+{{end}}
+
+{{define "nav.html"}}
+<header class="search-header-container">
+  <div class="search-header">
+    <a href="/" class="brand-link">Flinternet</a>
+    <form class="search-form" action="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/" method="get" autocomplete="off">
+      <div class="search-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </div>
+      <input type="text" name="q" placeholder="Search pins, videos, @user, or user/board..." value="{{.Query}}" required>
+      <button type="submit" aria-label="Search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </button>
+    </form>
+  </div>
+
+  {{if .Query}}
+  <nav class="search-filters" aria-label="Search scopes">
+    <a href="/search/pins/?q={{urlquery .Query}}" class="filter-item {{if or (not .Scope) (eq .Scope "pins")}}active{{end}}">All Pins</a>
+    <a href="/search/videos/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "videos"}}active{{end}}">Videos</a>
+    <a href="/search/boards/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "boards"}}active{{end}}">Boards</a>
+    <a href="/search/users/?q={{urlquery .Query}}" class="filter-item {{if eq .Scope "users"}}active{{end}}">Users</a>
+  </nav>
+  {{end}}
+
+  {{if .Tabs}}
+  <div class="guide-pills" aria-label="Topic guides">
+    {{range .Tabs}}
+      <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}" class="guide-chip">{{.Label}}</a>
+    {{end}}
+  </div>
+  {{end}}
+</header>
+{{end}}
+
+{{define "pin_grid.html"}}
+<div class="grid">
+  <div class="grid-sizer"></div>
+  {{range .Pins}}
+    <article class="grid-item post-card {{if .IsVideo}}video-item{{end}}">
+      <div class="post-header">
+        {{if .Pinner.Username}}
+          <a href="/{{.Pinner.Username}}/" class="author-avatar-link">
+            {{if .Pinner.AvatarURL}}
+              <img src="{{.Pinner.AvatarURL | proxyURL}}" class="author-avatar" alt="" loading="lazy">
+            {{else}}
+              <div class="author-avatar-placeholder"></div>
+            {{end}}
+          </a>
+          <a href="/{{.Pinner.Username}}/" class="author-name">
+            {{if .Pinner.FullName}}{{.Pinner.FullName}}{{else}}@{{.Pinner.Username}}{{end}}
+          </a>
+        {{else if .Pinner.FullName}}
+          {{if .Pinner.AvatarURL}}
+            <img src="{{.Pinner.AvatarURL | proxyURL}}" class="author-avatar" alt="" loading="lazy">
+          {{else}}
+            <div class="author-avatar-placeholder"></div>
+          {{end}}
+          <span class="author-name">{{.Pinner.FullName}}</span>
+        {{else}}
+          <div class="author-avatar-placeholder"></div>
+          <a href="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" class="author-name">{{if .Domain}}{{.Domain}}{{else}}Pinterest Creator{{end}}</a>
+        {{end}}
+      </div>
+
+      <div class="post-media" {{if and .Width .Height}}style="padding-bottom: calc({{.Height}} / {{.Width}} * 100%);"{{else}}style="padding-bottom: 133.33%;"{{end}}{{if .DominantColor}} data-color="{{.DominantColor}}"{{end}}>
+        {{if .IsVideo}}
+          <div class="video-container paused" data-pin-id="{{.ID}}">
+            <video playsinline preload="metadata"
+              poster="{{if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
+              data-src="{{if .HLSVideoURL}}{{.HLSVideoURL | proxyURL}}{{else}}{{.VideoURL | proxyURL}}{{end}}"
+              {{if .MP4VideoURL}}data-mp4="{{.MP4VideoURL | proxyURL}}"{{end}}
+              muted>
+              Video playback requires a modern browser.
+            </video>
+            <a href="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" class="open-pin-link" title="Open pin" aria-label="Open pin">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline>
+              </svg>
+            </a>
+            <div class="video-overlay">
+              <div class="play-pause-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              </div>
+            </div>
+            <div class="video-loader"></div>
+            <div class="video-controls-bottom">
+              <div class="mute-toggle" onclick="event.stopPropagation(); toggleMute(this);" title="Toggle Mute"></div>
+            </div>
+            <div class="video-progress-container"><div class="video-progress-bar"></div></div>
+          </div>
+        {{else}}
+          <a href="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" class="image-wrapper">
+            <img loading="lazy"
+              src="{{if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
+              alt="{{if .AltText}}{{.AltText}}{{else if .Title}}{{.Title}}{{else}}Pinterest Pin{{end}}"
+              onload="if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()">
+          </a>
+        {{end}}
+      </div>
+
+      <div class="post-meta">
+        <div class="post-actions">
+          <div class="action-item" title="Engagement">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+            <span>{{.Likes | formatCount}}</span>
+            {{if .Saves}}
+              <span>&bull;</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+              <span>{{.Saves | formatCount}}</span>
+            {{end}}
+            {{if .CommentCount}}
+              <span>&bull;</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+              <span>{{.CommentCount | formatCount}}</span>
+            {{end}}
+          </div>
+          <button type="button" class="share-btn" title="Copy Pin Link" data-share-title="{{if .Title}}{{.Title}}{{else if .RichTitle}}{{.RichTitle}}{{else}}Pinterest Pin{{end}}" data-share-url="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" onclick="handleShare(event, this)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+          </button>
+        </div>
+
+        {{if .Title}}
+          <a href="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" class="post-title">{{.Title}}</a>
+        {{else if .RichTitle}}
+          <a href="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" class="post-title">{{.RichTitle}}</a>
+        {{else if .AltText}}
+          <a href="/pin/{{.ID}}/{{if $.Query}}?q={{urlquery $.Query}}&s={{$.Scope}}{{end}}" class="post-title">{{.AltText}}</a>
+        {{end}}
+
+        {{if and .Description (ne .Description " ")}}
+          <div class="post-description-container">
+            <input type="checkbox" id="desc-{{.ID}}" class="desc-toggle">
+            <div class="post-description">{{.Description}}</div>
+            <label for="desc-{{.ID}}" class="show-more-label">more</label>
+          </div>
+        {{end}}
+      </div>
+    </article>
+  {{end}}
+</div>
+{{end}}
+
+{{define "footer.html"}}
+<script src="/static/masonry.pkgd.min.js"></script>
+{{if .HasVideo}}<script src="/static/hls.light.min.js"></script>{{end}}
+<script src="/static/app.js?v={{.Version}}"></script>
+</body>
+</html>
+{{end}}

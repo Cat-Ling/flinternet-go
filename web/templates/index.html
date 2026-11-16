@@ -1,0 +1,29 @@
+{{template "header.html" .}}
+<title>Flinternet - Privacy-Respecting Pinterest Client</title>
+</head>
+<body>
+  <main class="home-hero container">
+    <h1 class="logo">Flinternet</h1>
+
+    <form class="search-form" action="/search/pins/" method="get" autocomplete="off">
+      <div class="search-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </div>
+      <input type="text" name="q" placeholder="Search Pinterest, @username, or user/board..." autofocus required>
+      <button type="submit" aria-label="Search">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </button>
+    </form>
+  </main>
+
+  <footer class="container">
+    <div class="footer-links">
+      <a href="/ideas">Ideas</a>
+      <a href="/legal">Legal Notice</a>
+    </div>
+  </footer>
+{{template "footer.html" .}}

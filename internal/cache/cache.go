@@ -1,190 +1,133 @@
+// Package cache provides a thread-safe generic LRU cache with per-entry TTL expiration.
 package cache
 
 import (
-	"fmt"
+	"container/list"
+	"sync"
 	"time"
-
-	badger "github.com/dgraph-io/badger/v4"
-	"github.com/dgraph-io/ristretto"
 )
 
-type Cache interface {
-	Get(key string) ([]byte, bool)
-	Set(key string, value []byte, ttl time.Duration)
-	Close() error
+type cacheEntry[K comparable, V any] struct {
+	key       K
+	value     V
+	expiresAt time.Time
 }
 
-// Default disk TTL for entries stored with ttl=0 (e.g., images)
-const defaultDiskTTL = 6 * time.Hour
-
-type LayeredCache struct {
-	memoryCache *ristretto.Cache
-	diskCache   *badger.DB
-	useMemory   bool
-	useDisk     bool
-	diskLimitMB int64
+// Cache stores up to maxEntries items with a fixed time-to-live.
+type Cache[K comparable, V any] struct {
+	mu         sync.Mutex
+	maxEntries int
+	ttl        time.Duration
+	now        func() time.Time
+	items      map[K]*list.Element
+	order      *list.List
 }
 
-func NewLayeredCache(useMemory bool, memoryLimit int64, useDisk bool, diskLimit int64) (*LayeredCache, error) {
-	lc := &LayeredCache{
-		useMemory:   useMemory,
-		useDisk:     useDisk,
-		diskLimitMB: diskLimit,
-	}
-
-	if useMemory {
-		config := &ristretto.Config{
-			NumCounters: 1e7,                       // number of keys to track frequency of (10M).
-			MaxCost:     memoryLimit * 1024 * 1024, // maximum cost of cache (MB).
-			BufferItems: 64,                        // number of keys per Get buffer.
-		}
-		cache, err := ristretto.NewCache(config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create memory cache: %w", err)
-		}
-		lc.memoryCache = cache
-	}
-
-	if useDisk {
-		opts := badger.DefaultOptions("cache/badger").
-			WithLogger(nil). // Silence badger's internal logging
-			WithNumVersionsToKeep(1).
-			WithValueLogFileSize(64 << 20). // 64MB value log files
-			WithNumMemtables(2).
-			WithNumLevelZeroTables(2).
-			WithNumLevelZeroTablesStall(4).
-			WithBlockCacheSize(32 << 20) // 32MB block cache for reads
-
-		db, err := badger.Open(opts)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open disk cache (badger): %w", err)
-		}
-		lc.diskCache = db
-
-		// Background GC goroutine — runs every 5 minutes to reclaim space from expired entries
-		go lc.runGC()
-	}
-
-	return lc, nil
+// New constructs a Cache bounded by maxEntries and entry TTL.
+// Non-positive maxEntries disables capacity limits; non-positive ttl disables expiration.
+func New[K comparable, V any](maxEntries int, ttl time.Duration) *Cache[K, V] {
+	return newWithClock[K, V](maxEntries, ttl, time.Now)
 }
 
-// runGC periodically runs BadgerDB's value log garbage collection
-func (c *LayeredCache) runGC() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for range ticker.C {
-		if c.diskCache == nil {
-			return
-		}
-		// Run GC until there's nothing left to collect (< 50% reclaimable)
-		for {
-			err := c.diskCache.RunValueLogGC(0.5)
-			if err != nil {
-				break // No more GC needed
-			}
-		}
-
-		// Check if we're over the disk limit and force-purge if needed
-		c.enforceDiskLimit()
+func newWithClock[K comparable, V any](maxEntries int, ttl time.Duration, now func() time.Time) *Cache[K, V] {
+	return &Cache[K, V]{
+		maxEntries: maxEntries,
+		ttl:        ttl,
+		now:        now,
+		items:      make(map[K]*list.Element),
+		order:      list.New(),
 	}
 }
 
-// enforceDiskLimit checks current DB size and drops oldest expired entries
-func (c *LayeredCache) enforceDiskLimit() {
-	if c.diskCache == nil || c.diskLimitMB <= 0 {
+// Get retrieves an unexpired entry and promotes it to the front of the LRU list.
+func (c *Cache[K, V]) Get(key K) (V, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.items[key]
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	entry := elem.Value.(*cacheEntry[K, V])
+	if !entry.expiresAt.IsZero() && !c.now().Before(entry.expiresAt) {
+		c.removeElement(elem)
+		var zero V
+		return zero, false
+	}
+	c.order.MoveToFront(elem)
+	return entry.value, true
+}
+
+// Set inserts or updates an entry, evicting expired or least-recently-used entries if full.
+func (c *Cache[K, V]) Set(key K, value V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.now()
+	var expiresAt time.Time
+	if c.ttl > 0 {
+		expiresAt = now.Add(c.ttl)
+	}
+
+	if elem, ok := c.items[key]; ok {
+		entry := elem.Value.(*cacheEntry[K, V])
+		entry.value = value
+		entry.expiresAt = expiresAt
+		c.order.MoveToFront(elem)
 		return
 	}
 
-	lsm, vlog := c.diskCache.Size()
-	totalBytes := lsm + vlog
-	limitBytes := c.diskLimitMB * 1024 * 1024
-
-	if totalBytes > limitBytes {
-		// Run aggressive GC (lower threshold = more aggressive)
-		for i := 0; i < 10; i++ {
-			if err := c.diskCache.RunValueLogGC(0.1); err != nil {
-				break
-			}
-		}
-
-		// Flatten the LSM tree to reclaim space
-		c.diskCache.Flatten(4)
-	}
-}
-
-func (c *LayeredCache) Get(key string) ([]byte, bool) {
-	if c.useMemory {
-		val, found := c.memoryCache.Get(key)
-		if found {
-			return val.([]byte), true
+	c.evictExpiredLocked(now)
+	if c.maxEntries > 0 && c.order.Len() >= c.maxEntries {
+		if tail := c.order.Back(); tail != nil {
+			c.removeElement(tail)
 		}
 	}
 
-	if c.useDisk && c.diskCache != nil {
-		var valCopy []byte
-		err := c.diskCache.View(func(txn *badger.Txn) error {
-			item, err := txn.Get([]byte(key))
-			if err != nil {
-				return err
-			}
-			valCopy, err = item.ValueCopy(nil)
-			return err
-		})
-		if err == nil && valCopy != nil {
-			// Promote to memory cache on disk hit
-			if c.useMemory {
-				c.memoryCache.Set(key, valCopy, int64(len(valCopy)))
-			}
-			return valCopy, true
+	entry := &cacheEntry[K, V]{
+		key:       key,
+		value:     value,
+		expiresAt: expiresAt,
+	}
+	elem := c.order.PushFront(entry)
+	c.items[key] = elem
+}
+
+// Len returns the number of entries currently stored, purging expired items first.
+func (c *Cache[K, V]) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.evictExpiredLocked(c.now())
+	return c.order.Len()
+}
+
+// Purge clears all entries from the cache.
+func (c *Cache[K, V]) Purge() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	clear(c.items)
+	c.order.Init()
+}
+
+func (c *Cache[K, V]) evictExpiredLocked(now time.Time) {
+	if c.ttl <= 0 {
+		return
+	}
+	for elem := c.order.Back(); elem != nil; {
+		prev := elem.Prev()
+		entry := elem.Value.(*cacheEntry[K, V])
+		if !entry.expiresAt.IsZero() && !now.Before(entry.expiresAt) {
+			c.removeElement(elem)
 		}
-	}
-
-	return nil, false
-}
-
-func (c *LayeredCache) Set(key string, value []byte, ttl time.Duration) {
-	if c.useMemory {
-		c.memoryCache.SetWithTTL(key, value, int64(len(value)), ttl)
-	}
-
-	if c.useDisk && c.diskCache != nil {
-		// Async disk write
-		valueCopy := make([]byte, len(value))
-		copy(valueCopy, value)
-
-		diskTTL := ttl
-		if diskTTL == 0 {
-			diskTTL = defaultDiskTTL
-		}
-
-		go func() {
-			// Check size before writing — skip if way over limit
-			if c.diskLimitMB > 0 {
-				lsm, vlog := c.diskCache.Size()
-				limitBytes := c.diskLimitMB * 1024 * 1024
-				if lsm+vlog > limitBytes {
-					return // Over limit, skip write — GC will reclaim space
-				}
-			}
-
-			c.diskCache.Update(func(txn *badger.Txn) error {
-				e := badger.NewEntry([]byte(key), valueCopy).WithTTL(diskTTL)
-				return txn.SetEntry(e)
-			})
-		}()
+		elem = prev
 	}
 }
 
-func (c *LayeredCache) Close() error {
-	if c.diskCache != nil {
-		return c.diskCache.Close()
-	}
-	return nil
+func (c *Cache[K, V]) removeElement(elem *list.Element) {
+	entry := elem.Value.(*cacheEntry[K, V])
+	delete(c.items, entry.key)
+	c.order.Remove(elem)
 }
-
-// NoOpCache implementation for when caching is disabled
-type NoOpCache struct{}
-
-func (n *NoOpCache) Get(key string) ([]byte, bool)                   { return nil, false }
-func (n *NoOpCache) Set(key string, value []byte, ttl time.Duration) {}
-func (n *NoOpCache) Close() error                                    { return nil }

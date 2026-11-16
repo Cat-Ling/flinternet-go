@@ -1,0 +1,76 @@
+{{template "header.html" .}}
+<title>{{.Profile.FullName}} (@{{.Profile.Username}}) | Flinternet</title>
+</head>
+<body>
+  {{template "nav.html" .}}
+
+  <main>
+    <section class="user-profile">
+      {{if .Profile.AvatarURL}}
+        <img src="{{.Profile.AvatarURL | proxyURL}}" class="profile-avatar" alt="@{{.Profile.Username}}">
+      {{else}}
+        <div class="profile-avatar"></div>
+      {{end}}
+      <div class="profile-info">
+        <h1>{{.Profile.FullName}}</h1>
+        <p class="profile-username">
+          @{{.Profile.Username}}
+          {{if .Profile.IsVerifiedMerchant}} &middot; Verified{{end}}
+          {{if .Profile.WebsiteURL}} &middot; <a href="{{.Profile.WebsiteURL}}" target="_blank" rel="noopener noreferrer nofollow" style="color: var(--text); text-decoration: underline;">{{.Profile.WebsiteURL}}</a>{{end}}
+        </p>
+        <div class="profile-stats">
+          <span><strong>{{.Profile.FollowerCount | formatCount}}</strong> followers</span>
+          <span><strong>{{.Profile.FollowingCount | formatCount}}</strong> following</span>
+          {{if .Profile.BoardCount}}<span><strong>{{.Profile.BoardCount | formatCount}}</strong> boards</span>{{end}}
+          {{if .Profile.PinCount}}<span><strong>{{.Profile.PinCount | formatCount}}</strong> pins</span>{{end}}
+          {{if .Profile.MonthlyViews}}<span><strong>{{.Profile.MonthlyViews | formatCount}}</strong> monthly views</span>{{end}}
+        </div>
+        {{if .Profile.About}}
+          <p class="profile-about">{{.Profile.About}}</p>
+        {{end}}
+      </div>
+    </section>
+
+    <nav class="search-filters" style="margin-bottom: 1rem;" aria-label="Profile tabs">
+      <a href="/{{.Profile.Username}}/" class="filter-item {{if eq .Tab "boards"}}active{{end}}">Boards</a>
+      <a href="/{{.Profile.Username}}/_created/" class="filter-item {{if eq .Tab "created"}}active{{end}}">Created</a>
+      <a href="/{{.Profile.Username}}/_saved/" class="filter-item {{if eq .Tab "pins"}}active{{end}}">Saved Pins</a>
+    </nav>
+
+    {{if eq .Tab "boards"}}
+      {{if .Boards}}
+        <div class="boards-grid">
+          <div class="grid-sizer"></div>
+          {{range .Boards}}
+            <a href="/{{if .Username}}{{.Username}}{{else}}{{$.Profile.Username}}{{end}}/{{.Slug}}/" class="board-card">
+              <div class="board-thumbnail">
+                {{if .CoverURL}}
+                  <img loading="lazy" src="{{.CoverURL | proxyURL}}" alt="{{.Name}}" onload="if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()">
+                {{end}}
+              </div>
+              <div class="board-meta">
+                <h3>{{.Name}}</h3>
+                <p>{{.PinCount}} Pins</p>
+              </div>
+            </a>
+          {{end}}
+        </div>
+      {{else}}
+        <p style="text-align: center; padding: 3rem 1rem; color: var(--text-dim);">No public boards found.</p>
+      {{end}}
+    {{else}}
+      {{if .Pins}}
+        {{template "pin_grid.html" .}}
+      {{else}}
+        <p style="text-align: center; padding: 3rem 1rem; color: var(--text-dim);">No pins found in this tab.</p>
+      {{end}}
+    {{end}}
+
+    {{if .Bookmark}}
+      <div class="pagination-wrap">
+        <a href="/{{.Profile.Username}}/{{if eq .Tab "created"}}_created/{{else if eq .Tab "pins"}}_saved/{{end}}?bookmark={{urlquery .Bookmark}}" class="load-more">Load more</a>
+      </div>
+    {{end}}
+  </main>
+
+{{template "footer.html" .}}

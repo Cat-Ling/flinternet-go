@@ -1,0 +1,48 @@
+{{template "header.html" .}}
+<title>{{if .Title}}{{.Title}}{{else}}Ideas{{end}} | Flinternet</title>
+</head>
+<body>
+  {{template "nav.html" .}}
+
+  <main class="container" style="padding-top: 1.5rem;">
+    <div style="text-align: center; margin-bottom: 1.5rem;">
+      <h1 style="margin: 0; font-size: 2rem; text-transform: capitalize;">{{if .Title}}{{.Title}}{{else}}Explore Ideas{{end}}</h1>
+    </div>
+
+    {{if .Pins}}
+      {{template "pin_grid.html" .}}
+      <div class="pagination-wrap">
+        {{if .Bookmark}}
+          <a href="/ideas/{{.Slug}}/{{.InterestID}}/?bookmark={{urlquery .Bookmark}}" class="load-more">Next page</a>
+        {{else if .Title}}
+          <a href="/search/pins/?q={{urlquery .Title}}" class="load-more">More {{.Title}} pins</a>
+        {{end}}
+      </div>
+    {{else if .Boards}}
+      <div class="boards-grid">
+        <div class="grid-sizer"></div>
+        {{range .Boards}}
+          <a href="/{{if .Username}}{{.Username}}{{else}}pinterest{{end}}/{{.Slug}}/" class="board-card">
+            <div class="board-thumbnail">
+              {{if .CoverURL}}
+                <img loading="lazy" src="{{.CoverURL | proxyURL}}" alt="{{.Name}}" onload="if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()">
+              {{end}}
+            </div>
+            <div class="board-meta">
+              <h3>{{.Name}}</h3>
+              <p>{{.PinCount}} Pins</p>
+            </div>
+          </a>
+        {{end}}
+      </div>
+      {{if .Bookmark}}
+        <div class="pagination-wrap">
+          <a href="/ideas/?bookmark={{urlquery .Bookmark}}" class="load-more">Next page</a>
+        </div>
+      {{end}}
+    {{else}}
+      <p style="text-align: center; padding: 3rem 1rem; color: var(--text-dim);">No ideas found.</p>
+    {{end}}
+  </main>
+
+{{template "footer.html" .}}

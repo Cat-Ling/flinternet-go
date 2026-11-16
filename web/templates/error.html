@@ -1,0 +1,18 @@
+{{template "header.html" .}}
+<title>Error {{.Status}} | Flinternet</title>
+</head>
+<body>
+  {{template "nav.html" .}}
+
+  <main class="home-hero container">
+    <h1 class="logo" style="font-size: 4.5rem;">{{.Status}}</h1>
+    <h2 style="margin: 0 0 1rem;">{{.Message}}</h2>
+    {{if .Detail}}
+      <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1.25rem; font-family: var(--mono); font-size: 0.86rem; color: var(--text-dim); max-width: 680px; word-break: break-word; margin-bottom: 1.5rem;">
+        {{.Detail}}
+      </div>
+    {{end}}
+    <a href="/" class="load-more">Return Home</a>
+  </main>
+
+{{template "footer.html" .}}

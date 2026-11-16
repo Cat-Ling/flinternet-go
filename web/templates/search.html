@@ -1,0 +1,58 @@
+{{template "header.html" .}}
+<title>{{.Query}}{{if eq .Scope "videos"}} - Videos{{else if eq .Scope "boards"}} - Boards{{else if eq .Scope "users"}} - Creators{{end}} | Flinternet</title>
+</head>
+<body>
+  {{template "nav.html" .}}
+
+  <main>
+    {{if .Pins}}
+      {{template "pin_grid.html" .}}
+    {{else if .Boards}}
+      <div class="boards-grid">
+        <div class="grid-sizer"></div>
+        {{range .Boards}}
+          <a href="/{{if .Username}}{{.Username}}{{else}}pinterest{{end}}/{{.Slug}}/?q={{urlquery $.Query}}&s={{$.Scope}}" class="board-card">
+            <div class="board-thumbnail">
+              {{if .CoverURL}}
+                <img loading="lazy" src="{{.CoverURL | proxyURL}}" alt="{{.Name}}" onload="if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()">
+              {{end}}
+            </div>
+            <div class="board-meta">
+              <h3>{{.Name}}</h3>
+              <p>{{if .Username}}@{{.Username}} &middot; {{end}}{{.PinCount}} Pins</p>
+            </div>
+          </a>
+        {{end}}
+      </div>
+    {{else if .Users}}
+      <div class="users-grid">
+        {{range .Users}}
+          <a href="/{{.Username}}/?q={{urlquery $.Query}}&s={{$.Scope}}" class="user-card">
+            {{if .AvatarURL}}
+              <img src="{{.AvatarURL | proxyURL}}" class="user-card-avatar" alt="" loading="lazy">
+            {{else}}
+              <div class="user-card-avatar"></div>
+            {{end}}
+            <div class="user-card-info">
+              <h3>{{if .FullName}}{{.FullName}}{{else}}{{.Username}}{{end}}</h3>
+              <p>@{{.Username}}</p>
+              {{if .FollowerCount}}<p>{{.FollowerCount | formatCount}} followers</p>{{end}}
+            </div>
+          </a>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="container" style="padding: 4rem 1rem; text-align: center; color: var(--text-dim);">
+        <h2>No results found for "{{.Query}}"</h2>
+        <p>Try another keyword or switch scopes above.</p>
+      </div>
+    {{end}}
+  </main>
+
+  {{if .Bookmark}}
+  <div class="pagination-wrap">
+    <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{urlquery .Query}}&bookmark={{urlquery .Bookmark}}" class="load-more">Next page</a>
+  </div>
+  {{end}}
+
+{{template "footer.html" .}}

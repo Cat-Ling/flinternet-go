@@ -1,43 +1,6 @@
-# Binaries
-/build/
-/bin/
-*.exe
-*-linux-*
-*-darwin-*
-*-windows-*
-test/binternet-rs
-test/github.com/
-test/github.com/flinternet/flinternet-linux-amd64
-
-# Environment configurations (secrets)
+bin/
+dist/
+coverage.out
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Dependency directories
-/node_modules/
-/vendor/
-
-# Local cache & data directories
-/cache/
-/test/cache/
-/data/
-
-# Editor/OS specific files
+*.exe
 .DS_Store
-Thumbs.db
-*.local
-.idea/
-.vscode/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Agent configuration / Instructions
-GEMINI.md
-.gemini/
-
