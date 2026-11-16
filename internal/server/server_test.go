@@ -156,11 +156,11 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 		t.Fatalf("unexpected endpoints response: %d %s", res.Code, res.Body.String())
 	}
 
-	// Without a ShareKey, cold-cache e1_ pins must NOT hit Pinterest or correlate via ?q=.
+	// Cold-cache e1_ pins without a ?p= snapshot token must NOT hit Pinterest or correlate via ?q=.
 	callsBeforeCold := *upstreamCalls
 	res = doRequest(t, h, http.MethodGet, "/pin/e1_pin-101/?q=cabin-cold&s=pins", nil)
 	if res.Code != http.StatusNotFound || *upstreamCalls != callsBeforeCold {
-		t.Fatalf("expected 404 with 0 upstream calls when ShareKey disabled, got code=%d calls=%d", res.Code, *upstreamCalls-callsBeforeCold)
+		t.Fatalf("expected 404 with 0 upstream calls without ?p= snapshot token, got code=%d calls=%d", res.Code, *upstreamCalls-callsBeforeCold)
 	}
 
 	// Search GET + cache verification
@@ -322,10 +322,10 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("expected SSRF URL to be rejected with 400, got %d %s", res.Code, res.Body.String())
 	}
-	// Ensure ShareKey disabled produces clean /pin/<id>/ links without ?c= or ?q=.
+	// Ensure keyless mode emits self-contained ?p= tokens and never ?c= or ?q=.
 	searchHTMLNoKey := doRequest(t, h, http.MethodGet, "/search/pins/?q=cabin", nil).Body.String()
-	if strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?c=") || strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?q=") {
-		t.Fatalf("unexpected correlation query on /pin/ link when ShareKey is empty")
+	if !strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?p=") || strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?c=") || strings.Contains(searchHTMLNoKey, "/pin/e1_pin-101/?q=") {
+		t.Fatalf("expected self-contained ?p= token without ?c= or ?q= on keyless /pin/ link")
 	}
 
 	res = doRequest(t, h, http.MethodGet, "/api/v1/does-not-exist", nil)
@@ -334,44 +334,109 @@ func TestAllServerEndpointsAndSSRPages(t *testing.T) {
 	}
 }
 
-func TestShareKeyCorrelationAcrossRestarts(t *testing.T) {
+func extractPinSnapshotToken(t *testing.T, htmlBody, pinID string) string {
+	t.Helper()
+	marker := "/pin/" + pinID + "/?p="
+	idx := strings.Index(htmlBody, marker)
+	if idx < 0 {
+		t.Fatalf("expected self-contained ?p= link for %s", pinID)
+	}
+	rest := htmlBody[idx+len(marker):]
+	end := strings.IndexAny(rest, `"'&<`)
+	if end < 0 {
+		return rest
+	}
+	return rest[:end]
+}
+
+func TestSelfContainedPinSnapshotsAcrossRestarts(t *testing.T) {
+	// 1) Keyless mode (empty ShareKey): base64url compressed snapshot, 0 upstream calls across restarts, zero ?q= leaks.
+	srvNoKey1, _ := newTestServer(t)
+	hNoKey1 := srvNoKey1.Handler()
+
+	searchNoKeyHTML := doRequest(t, hNoKey1, http.MethodGet, "/search/pins/?q=cabin", nil).Body.String()
+	if strings.Contains(searchNoKeyHTML, "/pin/e1_pin-101/?q=") {
+		t.Fatalf("search query leaked onto pin link in keyless mode")
+	}
+	keylessSearchTok := extractPinSnapshotToken(t, searchNoKeyHTML, "e1_pin-101")
+	boardNoKeyHTML := doRequest(t, hNoKey1, http.MethodGet, "/nordicstudio/cabins/", nil).Body.String()
+	keylessBoardTok := extractPinSnapshotToken(t, boardNoKeyHTML, "e1_pin-404")
+	ideasNoKeyHTML := doRequest(t, hNoKey1, http.MethodGet, "/ideas/nordic-design/908182459161/", nil).Body.String()
+	keylessIdeasTok := extractPinSnapshotToken(t, ideasNoKeyHTML, "e1_pin-505")
+
+	srvNoKey2, upstreamNoKey2 := newTestServer(t)
+	hNoKey2 := srvNoKey2.Handler()
+	for _, tc := range []struct {
+		id, tok, wantTitle string
+	}{
+		{"e1_pin-101", keylessSearchTok, "Nordic Cabin"},
+		{"e1_pin-404", keylessBoardTok, "A-Frame"},
+		{"e1_pin-505", keylessIdeasTok, "Nordic Idea"},
+	} {
+		// API lookup must restore purely from ?p= with 0 upstream calls and without polluting pinCache.
+		callsBefore := *upstreamNoKey2
+		apiRes := doRequest(t, hNoKey2, http.MethodGet, "/api/v1/pins/"+tc.id+"?p="+tc.tok, nil)
+		if apiRes.Code != http.StatusOK || !strings.Contains(apiRes.Body.String(), tc.wantTitle) {
+			t.Fatalf("keyless API restart restore failed for %s: code=%d body=%s", tc.id, apiRes.Code, apiRes.Body.String())
+		}
+		if *upstreamNoKey2 != callsBefore {
+			t.Fatalf("expected 0 upstream calls restoring %s from ?p=, got %d", tc.id, *upstreamNoKey2-callsBefore)
+		}
+		if _, cached := srvNoKey2.pinCache.Get(tc.id); cached {
+			t.Fatalf("keyless unauthenticated ?p= decode must not populate global pinCache")
+		}
+		// SSR page also resolves on fresh instance.
+		res := doRequest(t, hNoKey2, http.MethodGet, "/pin/"+tc.id+"/?p="+tc.tok, nil)
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), tc.wantTitle) {
+			t.Fatalf("keyless SSR restart lookup failed for %s: code=%d", tc.id, res.Code)
+		}
+	}
+
+	evilTok, _ := encodeSnapshotBytes(nil, "e1_xss", pinSnapshot{
+		Img:   "oj:b1b717714fc20ded79a7580af314718d",
+		Title: `<script>alert(1)</script>`,
+		Color: `red;background:url(https://evil.test)`,
+		PUser: `/evil.test`,
+		Link:  `javascript:alert(1)`,
+		AggID: `99" onclick="alert(1)`,
+	})
+	xssRes := doRequest(t, hNoKey2, http.MethodGet, "/pin/e1_xss/?p="+evilTok, nil)
+	if xssRes.Code != http.StatusOK {
+		t.Fatalf("expected 200 rendering sanitized snapshot, got %d", xssRes.Code)
+	}
+	if _, cached := srvNoKey2.pinCache.Get("e1_xss"); cached {
+		t.Fatalf("keyless unauthenticated SSR ?p= decode must not populate global pinCache")
+	}
+	xssBody := xssRes.Body.String()
+	if strings.Contains(xssBody, `<script>alert(1)</script>`) ||
+		strings.Contains(xssBody, `href="//evil.test/`) ||
+		strings.Contains(xssBody, `javascript:alert(1)`) ||
+		strings.Contains(xssBody, `url(https://evil.test)`) ||
+		strings.Contains(xssBody, `ZgotmplZ`) {
+		t.Fatalf("unsafe crafted payload leaked into SSR HTML: %s", xssBody)
+	}
+
+	// 2) Keyed mode (ShareKey set): AES-256-GCM encrypted snapshot, rejects keyless/tampered/cross-pin/wrong-key tokens.
 	srv1, _ := newTestServerWithShareKey(t, "test-secret-key-2026")
 	h1 := srv1.Handler()
-
-	extractToken := func(htmlBody, pinID string) string {
-		marker := "/pin/" + pinID + "/?c="
-		idx := strings.Index(htmlBody, marker)
-		if idx < 0 {
-			t.Fatalf("expected encrypted ?c= link for %s", pinID)
-		}
-		rest := htmlBody[idx+len(marker):]
-		end := strings.IndexAny(rest, `"'&<`)
-		if end < 0 {
-			return rest
-		}
-		return rest[:end]
-	}
 
 	searchHTML := doRequest(t, h1, http.MethodGet, "/search/pins/?q=cabin", nil).Body.String()
 	if strings.Contains(searchHTML, "/pin/e1_pin-101/?q=") {
 		t.Fatalf("plaintext search query leaked onto pin link")
 	}
-	searchTok := extractToken(searchHTML, "e1_pin-101")
-
+	searchTok := extractPinSnapshotToken(t, searchHTML, "e1_pin-101")
 	boardHTML := doRequest(t, h1, http.MethodGet, "/nordicstudio/cabins/", nil).Body.String()
-	boardTok := extractToken(boardHTML, "e1_pin-404")
-
+	boardTok := extractPinSnapshotToken(t, boardHTML, "e1_pin-404")
 	ideasHTML := doRequest(t, h1, http.MethodGet, "/ideas/nordic-design/908182459161/", nil).Body.String()
-	ideasTok := extractToken(ideasHTML, "e1_pin-505")
+	ideasTok := extractPinSnapshotToken(t, ideasHTML, "e1_pin-505")
 
-	// Simulate fresh server restart with empty caches and same ShareKey.
+	// Fresh server with the SAME ShareKey.
 	srv2, upstream2 := newTestServerWithShareKey(t, "test-secret-key-2026")
 	h2 := srv2.Handler()
 
-	// Cross-pin, tampered, and missing tokens on a cold cache must reject with 404 and 0 upstream calls.
 	for _, badPath := range []string{
-		"/pin/e1_pin-101/?c=" + boardTok,
-		"/pin/e1_pin-101/?c=invalid-token",
+		"/pin/e1_pin-101/?p=" + boardTok,
+		"/pin/e1_pin-101/?p=invalid-token",
 		"/pin/e1_pin-101/",
 	} {
 		res := doRequest(t, h2, http.MethodGet, badPath, nil)
@@ -383,6 +448,22 @@ func TestShareKeyCorrelationAcrossRestarts(t *testing.T) {
 		t.Fatalf("expected 0 upstream calls for rejected tokens, got %d", *upstream2)
 	}
 
+	// Previously shared keyless token continues working even after ShareKey is later enabled, without polluting pinCache.
+	legacyRes := doRequest(t, h2, http.MethodGet, "/api/v1/pins/e1_pin-101?p="+keylessSearchTok, nil)
+	if legacyRes.Code != http.StatusOK || !strings.Contains(legacyRes.Body.String(), "Nordic Cabin") {
+		t.Fatalf("expected previously shared keyless token to work after enabling ShareKey, got %d", legacyRes.Code)
+	}
+	if _, cached := srv2.pinCache.Get("e1_pin-101"); cached {
+		t.Fatalf("legacy unauthenticated token must not populate global pinCache on keyed server")
+	}
+
+	// Fresh server with a DIFFERENT ShareKey must also reject encrypted tokens.
+	srvWrongKey, upstreamWrongKey := newTestServerWithShareKey(t, "wrong-secret-key")
+	resWrong := doRequest(t, srvWrongKey.Handler(), http.MethodGet, "/pin/e1_pin-101/?p="+searchTok, nil)
+	if resWrong.Code != http.StatusNotFound || *upstreamWrongKey != 0 {
+		t.Fatalf("expected 404 and 0 upstream calls on wrong ShareKey, got code=%d calls=%d", resWrong.Code, *upstreamWrongKey)
+	}
+
 	for _, tc := range []struct {
 		id, tok, wantTitle string
 	}{
@@ -390,9 +471,17 @@ func TestShareKeyCorrelationAcrossRestarts(t *testing.T) {
 		{"e1_pin-404", boardTok, "A-Frame"},
 		{"e1_pin-505", ideasTok, "Nordic Idea"},
 	} {
-		res := doRequest(t, h2, http.MethodGet, "/pin/"+tc.id+"/?c="+tc.tok, nil)
+		callsBefore := *upstream2
+		apiRes := doRequest(t, h2, http.MethodGet, "/api/v1/pins/"+tc.id+"?p="+tc.tok, nil)
+		if apiRes.Code != http.StatusOK || !strings.Contains(apiRes.Body.String(), tc.wantTitle) {
+			t.Fatalf("keyed API restart lookup failed for %s: code=%d", tc.id, apiRes.Code)
+		}
+		if *upstream2 != callsBefore {
+			t.Fatalf("expected 0 upstream calls restoring keyed %s, got %d", tc.id, *upstream2-callsBefore)
+		}
+		res := doRequest(t, h2, http.MethodGet, "/pin/"+tc.id+"/?p="+tc.tok, nil)
 		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), tc.wantTitle) {
-			t.Fatalf("correlated restart lookup failed for %s: code=%d", tc.id, res.Code)
+			t.Fatalf("keyed SSR restart lookup failed for %s: code=%d", tc.id, res.Code)
 		}
 	}
 }

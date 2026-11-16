@@ -103,7 +103,7 @@
           <span class="author-name">{{.Pinner.FullName}}</span>
         {{else}}
           <div class="author-avatar-placeholder"></div>
-          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" class="author-name">{{if .Domain}}{{.Domain}}{{else}}Pinterest Creator{{end}}</a>
+          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="author-name">{{if .Domain}}{{.Domain}}{{else}}Pinterest Creator{{end}}</a>
         {{end}}
       </div>
 
@@ -117,7 +117,7 @@
               muted>
               Video playback requires a modern browser.
             </video>
-            <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" class="open-pin-link" title="Open pin" aria-label="Open pin">
+            <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="open-pin-link" title="Open pin" aria-label="Open pin">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline>
               </svg>
@@ -134,7 +134,7 @@
             <div class="video-progress-container"><div class="video-progress-bar"></div></div>
           </div>
         {{else}}
-          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" class="image-wrapper">
+          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="image-wrapper">
             <img loading="lazy"
               src="{{if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
               alt="{{if .AltText}}{{.AltText}}{{else if .Title}}{{.Title}}{{else}}Pinterest Pin{{end}}"
@@ -159,17 +159,17 @@
               <span>{{.CommentCount | formatCount}}</span>
             {{end}}
           </div>
-          <button type="button" class="share-btn" title="Copy Pin Link" data-share-title="{{if .Title}}{{.Title}}{{else if .RichTitle}}{{.RichTitle}}{{else}}Pinterest Pin{{end}}" data-share-url="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" onclick="handleShare(event, this)">
+          <button type="button" class="share-btn" title="Copy Pin Link" data-share-title="{{if .Title}}{{.Title}}{{else if .RichTitle}}{{.RichTitle}}{{else}}Pinterest Pin{{end}}" data-share-url="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" onclick="handleShare(event, this)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
           </button>
         </div>
 
         {{if .Title}}
-          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" class="post-title">{{.Title}}</a>
+          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="post-title">{{.Title}}</a>
         {{else if .RichTitle}}
-          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" class="post-title">{{.RichTitle}}</a>
+          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="post-title">{{.RichTitle}}</a>
         {{else if .AltText}}
-          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?c={{urlquery .}}{{end}}" class="post-title">{{.AltText}}</a>
+          <a href="/pin/{{.ID}}/{{with index $.PinTokens .ID}}?p={{urlquery .}}{{end}}" class="post-title">{{.AltText}}</a>
         {{end}}
 
         {{if and .Description (ne .Description " ")}}

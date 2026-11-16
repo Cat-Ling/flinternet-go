@@ -60,11 +60,8 @@ type Server struct {
 	createdPinsCache   *cache.Cache[string, *pinterest.PageResult[pinterest.Pin]]
 	boardCache         *cache.Cache[string, *pinterest.Board]
 	boardPinsCache     *cache.Cache[string, *pinterest.PageResult[pinterest.Pin]]
-	ideasCache         *cache.Cache[string, *pinterest.PageResult[pinterest.Pin]]
 	pinCache           *cache.Cache[string, pinterest.Pin]
 	hlsCache           *cache.Cache[string, string]
-	negCorrCache       *cache.Cache[string, struct{}]
-	corrFlight         singleflightGroup[*pinterest.PageResult[pinterest.Pin]]
 }
 
 // New constructs a configured Server ready to handle HTTP traffic.
@@ -110,10 +107,8 @@ func New(cfg Config) (*Server, error) {
 		createdPinsCache:   cache.New[string, *pinterest.PageResult[pinterest.Pin]](defaultCacheItems, ttl),
 		boardCache:         cache.New[string, *pinterest.Board](defaultCacheItems, ttl),
 		boardPinsCache:     cache.New[string, *pinterest.PageResult[pinterest.Pin]](defaultCacheItems, ttl),
-		ideasCache:         cache.New[string, *pinterest.PageResult[pinterest.Pin]](defaultCacheItems, ttl),
 		pinCache:           cache.New[string, pinterest.Pin](defaultPinCache, 30*time.Minute),
 		hlsCache:           cache.New[string, string](defaultCacheItems, ttl),
-		negCorrCache:       cache.New[string, struct{}](defaultCacheItems, 2*time.Minute),
 	}
 	s.registerRoutes()
 	return s, nil
@@ -736,8 +731,8 @@ func (s *Server) cachedSearchUsers(r *http.Request, params pinterest.SearchParam
 	return page, false, nil
 }
 
-func (s *Server) buildGridTokens(pins []pinterest.Pin, kind, target, sub, bookmark string) map[string]string {
-	if s.shareCodec == nil || len(pins) == 0 || kind == "" || target == "" {
+func (s *Server) buildPinTokens(pins []pinterest.Pin) map[string]string {
+	if len(pins) == 0 {
 		return nil
 	}
 	tokens := make(map[string]string, len(pins))
@@ -745,14 +740,7 @@ func (s *Server) buildGridTokens(pins []pinterest.Pin, kind, target, sub, bookma
 		if !strings.HasPrefix(p.ID, "e1_") {
 			continue
 		}
-		tok, err := s.shareCodec.seal(p.ID, pinSource{
-			Kind:     kind,
-			Target:   target,
-			Sub:      sub,
-			Bookmark: bookmark,
-			AggID:    p.AggregatedPinID,
-			MediaKey: pinMediaKey(p),
-		})
+		tok, err := encodeBoundedPinToken(s.shareCodec, p)
 		if err == nil && tok != "" {
 			tokens[p.ID] = tok
 		}
@@ -761,89 +749,6 @@ func (s *Server) buildGridTokens(pins []pinterest.Pin, kind, target, sub, bookma
 		return nil
 	}
 	return tokens
-}
-
-func (s *Server) fetchCorrelatedSource(r *http.Request, src pinSource) (*pinterest.PageResult[pinterest.Pin], error) {
-	key := src.cacheKey()
-	if src.Kind == sourceSearch {
-		scope := pinterest.SearchScope(src.Sub)
-		if scope != pinterest.ScopePins && scope != pinterest.ScopeVideos {
-			scope = pinterest.ScopePins
-		}
-		searchKey := string(scope) + "|" + strings.ToLower(src.Target) + "|" + src.Bookmark
-		if page, ok := s.searchPinsCache.Get(searchKey); ok {
-			return page, nil
-		}
-	} else if page, ok := s.ideasCache.Get(key); ok {
-		return page, nil
-	}
-
-	return s.corrFlight.do(key, func() (*pinterest.PageResult[pinterest.Pin], error) {
-		ctx := r.Context()
-		allow := true
-		var (
-			page *pinterest.PageResult[pinterest.Pin]
-			err  error
-		)
-		switch src.Kind {
-		case sourceSearch:
-			scope := pinterest.SearchScope(src.Sub)
-			if scope != pinterest.ScopePins && scope != pinterest.ScopeVideos {
-				scope = pinterest.ScopePins
-			}
-			page, _, err = s.cachedSearchPins(r, pinterest.SearchParams{
-				Query:           src.Target,
-				Scope:           scope,
-				Bookmark:        src.Bookmark,
-				AllowUnverified: &allow,
-			})
-			return page, err
-		case sourceBoard:
-			sourceURL := firstNonEmptyQuery(src.Sub, "/")
-			page, err = s.client.PublicBoardPins(ctx, src.Target, sourceURL, 25, src.Bookmark, &allow)
-		case sourceUserPins:
-			page, err = s.client.PublicProfilePins(ctx, src.Target, 25, src.Bookmark, &allow)
-		case sourceUserCreated:
-			page, err = s.client.PublicCreatedPins(ctx, src.Target, src.Sub, 25, src.Bookmark, &allow)
-		case sourceIdeas:
-			page, err = s.client.PublicIdeas(ctx, src.Target, src.Sub, src.Bookmark)
-		default:
-			return nil, fmt.Errorf("unsupported pin correlation source %q", src.Kind)
-		}
-		if err != nil {
-			return nil, err
-		}
-		s.indexPins(page.Results)
-		s.ideasCache.Set(key, page)
-		return page, nil
-	})
-}
-
-func (s *Server) resolveCorrelatedPin(r *http.Request, pinID string) (pinterest.Pin, bool) {
-	if s.shareCodec == nil || !strings.HasPrefix(pinID, "e1_") {
-		return pinterest.Pin{}, false
-	}
-	tok := strings.TrimSpace(r.URL.Query().Get("c"))
-	src, ok := s.shareCodec.open(pinID, tok)
-	if !ok {
-		return pinterest.Pin{}, false
-	}
-	negKey := pinID + "|" + src.cacheKey()
-	if _, missed := s.negCorrCache.Get(negKey); missed {
-		return pinterest.Pin{}, false
-	}
-	page, err := s.fetchCorrelatedSource(r, src)
-	if err != nil || page == nil {
-		s.negCorrCache.Set(negKey, struct{}{})
-		return pinterest.Pin{}, false
-	}
-	matched, found := matchCorrelatedPin(page.Results, pinID, src)
-	if !found {
-		s.negCorrCache.Set(negKey, struct{}{})
-		return pinterest.Pin{}, false
-	}
-	s.pinCache.Set(pinID, matched)
-	return matched, true
 }
 
 func (s *Server) loadPinByID(r *http.Request, rawID string) (pinterest.Pin, error) {
@@ -855,13 +760,18 @@ func (s *Server) loadPinByID(r *http.Request, rawID string) (pinterest.Pin, erro
 	needsEnrich := !ok || (!strings.HasPrefix(pinID, "e1_") && cached.Saves == 0 && cached.Repins == 0)
 	if needsEnrich {
 		if !ok && strings.HasPrefix(pinID, "e1_") {
-			if rehydrated, found := s.resolveCorrelatedPin(r, pinID); found {
-				return rehydrated, nil
+			if tok := strings.TrimSpace(r.URL.Query().Get("p")); tok != "" {
+				if restored, authenticated, valid := decodePinSnapshot(s.shareCodec, pinID, tok); valid {
+					// Only populate shared pinCache when cryptographically authenticated by ShareKey.
+					if authenticated {
+						s.pinCache.Set(pinID, restored)
+					}
+					return restored, nil
+				}
 			}
-			// Without an active share correlation key+token, do not query Pinterest or leak searches.
 			return pinterest.Pin{}, &pinterest.Error{
 				Code:    pinterest.CodeHTTPError,
-				Message: "pin not found in cache",
+				Message: "pin not found",
 				Status:  http.StatusNotFound,
 			}
 		}

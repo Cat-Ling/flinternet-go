@@ -438,7 +438,7 @@ func (s *Server) handleSearchPageWithQuery(w http.ResponseWriter, r *http.Reques
 		data.Tabs = page.Tabs
 		data.Bookmark = page.Bookmark
 		data.HasVideo = pinsHaveVideo(page.Results)
-		data.PinTokens = s.buildGridTokens(page.Results, sourceSearch, query, scope, bookmark)
+		data.PinTokens = s.buildPinTokens(page.Results)
 		data.OgDescription = fmt.Sprintf("%d Pinterest %s matching %q.", len(page.Results), scope, query)
 		if len(page.Results) > 0 {
 			first := page.Results[0]
@@ -529,7 +529,7 @@ func (s *Server) handlePinPage(w http.ResponseWriter, r *http.Request, rawID str
 			Scope:     scope,
 			IsSafari:  isSafari,
 			Pins:      related,
-			PinTokens: s.buildGridTokens(related, sourceSearch, relQuery, string(pinterest.ScopePins), ""),
+			PinTokens: s.buildPinTokens(related),
 		},
 	})
 }
@@ -614,7 +614,7 @@ func (s *Server) handleUserPage(w http.ResponseWriter, r *http.Request, username
 		data.Pins = page.Results
 		data.Bookmark = page.Bookmark
 		data.HasVideo = pinsHaveVideo(page.Results)
-		data.PinTokens = s.buildGridTokens(page.Results, sourceUserCreated, profile.Username, profile.ID, bookmark)
+		data.PinTokens = s.buildPinTokens(page.Results)
 	case "pins":
 		page, err := s.client.PublicProfilePins(r.Context(), profile.Username, 25, bookmark, &allowUnverified)
 		if err != nil {
@@ -625,7 +625,7 @@ func (s *Server) handleUserPage(w http.ResponseWriter, r *http.Request, username
 		data.Pins = page.Results
 		data.Bookmark = page.Bookmark
 		data.HasVideo = pinsHaveVideo(page.Results)
-		data.PinTokens = s.buildGridTokens(page.Results, sourceUserPins, profile.Username, "", bookmark)
+		data.PinTokens = s.buildPinTokens(page.Results)
 	default:
 		data.Tab = "boards"
 		page, err := s.client.PublicProfileBoards(r.Context(), profile.Username, bookmark)
@@ -669,7 +669,7 @@ func (s *Server) handleBoardPage(w http.ResponseWriter, r *http.Request, usernam
 			Scope:         firstNonEmptyQuery(r.URL.Query().Get("s"), "boards"),
 			IsSafari:      isSafariRequest(r),
 			HasVideo:      pinsHaveVideo(page.Results),
-			PinTokens:     s.buildGridTokens(page.Results, sourceBoard, board.ID, sourceURL, bookmark),
+			PinTokens:     s.buildPinTokens(page.Results),
 			OgTitle:       fmt.Sprintf("%s (@%s) | Flinternet", board.Name, username),
 			OgDescription: firstNonEmptyQuery(board.Description, fmt.Sprintf("%d pins on Flinternet", board.PinCount)),
 			OgImage:       ogImage,
@@ -735,7 +735,7 @@ func (s *Server) handleIdeasTopicPage(w http.ResponseWriter, r *http.Request, sl
 			Scope:         "pins",
 			IsSafari:      isSafariRequest(r),
 			HasVideo:      pinsHaveVideo(page.Results),
-			PinTokens:     s.buildGridTokens(page.Results, sourceIdeas, slug, interestID, bookmark),
+			PinTokens:     s.buildPinTokens(page.Results),
 			OgTitle:       fmt.Sprintf("%s | Flinternet", title),
 			OgDescription: fmt.Sprintf("%d curated Pinterest ideas for %s.", len(page.Results), title),
 			OgImage:       ogImage,
