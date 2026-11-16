@@ -3,7 +3,7 @@
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH
-ARG TARGETARM
+ARG TARGETVARIANT=""
 ARG VERSION=1.0.0
 
 WORKDIR /src
@@ -13,9 +13,10 @@ COPY internal ./internal
 COPY web ./web
 
 RUN set -eu; \
-    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH:-amd64}"; \
-    if [ "${GOARCH}" = "arm" ] && [ -n "${TARGETARM}" ]; then \
-      export GOARM="${TARGETARM#v}"; \
+    export CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}"; \
+    variant="${TARGETVARIANT:-}"; \
+    if [ "${GOARCH}" = "arm" ] && [ -n "${variant}" ]; then \
+      export GOARM="${variant#v}"; \
     fi; \
     go build -trimpath -ldflags="-s -w -X github.com/flinternet/flinternet/internal/server.Version=${VERSION}" -o /out/flinternet ./cmd/flinternet
 
