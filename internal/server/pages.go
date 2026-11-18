@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -8,6 +9,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/flinternet/flinternet/internal/pinterest"
 )
@@ -469,7 +472,7 @@ func (s *Server) handleSearchPageWithQuery(w http.ResponseWriter, r *http.Reques
 			data.OgImage = page.Results[0].AvatarURL
 		}
 	default:
-		page, _, err := s.cachedSearchPins(r, params)
+		page, _, err := s.cachedSearchPins(r.Context(), params)
 		if err != nil {
 			s.renderErrorPage(w, r, err, "Search failed")
 			return
@@ -493,29 +496,72 @@ func (s *Server) handleSearchPageWithQuery(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handlePinPage(w http.ResponseWriter, r *http.Request, rawID string) {
-	pin, err := s.loadPinByID(r, rawID)
-	if err != nil {
-		s.renderErrorPage(w, r, err, "Pin not found")
-		return
-	}
+	pinID := pinterest.ExtractPinID(rawID)
+	cachedPin, inCache := s.pinCache.Get(pinID)
+	filterGenAI := resolveLessAIPref(nil, r)
 
-	query := r.URL.Query().Get("q")
-	scope := firstNonEmptyQuery(r.URL.Query().Get("s"), "pins")
-
-	var related []pinterest.Pin
-	relQuery := relatedSearchQuery(pin)
-	if relQuery != "" {
-		if page, _, relErr := s.cachedSearchPins(r, pinterest.SearchParams{Query: relQuery, Scope: pinterest.ScopePins}); relErr == nil {
-			for _, item := range page.Results {
-				if item.ID != pin.ID {
-					related = append(related, item)
-				}
-				if len(related) >= 16 {
+	fetchRelated := func(target pinterest.Pin) []pinterest.Pin {
+		relQuery := relatedSearchQuery(target)
+		if relQuery == "" {
+			return nil
+		}
+		relCtx, cancel := context.WithTimeout(r.Context(), 2500*time.Millisecond)
+		defer cancel()
+		page, _, relErr := s.cachedSearchPins(relCtx, pinterest.SearchParams{
+			Query:       relQuery,
+			Scope:       pinterest.ScopePins,
+			FilterGenAI: filterGenAI,
+		})
+		if relErr != nil {
+			return nil
+		}
+		out := make([]pinterest.Pin, 0, 16)
+		for _, item := range page.Results {
+			if item.ID != target.ID {
+				out = append(out, item)
+				if len(out) >= 16 {
 					break
 				}
 			}
 		}
+		return out
 	}
+
+	var (
+		pin     pinterest.Pin
+		err     error
+		related []pinterest.Pin
+	)
+	if inCache {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			pin, err = s.loadPinByID(r, rawID)
+		}()
+		go func() {
+			defer wg.Done()
+			related = fetchRelated(cachedPin)
+		}()
+		wg.Wait()
+		if err != nil {
+			s.renderErrorPage(w, r, err, "Pin not found")
+			return
+		}
+		if len(related) == 0 && relatedSearchQuery(cachedPin) == "" && relatedSearchQuery(pin) != "" {
+			related = fetchRelated(pin)
+		}
+	} else {
+		pin, err = s.loadPinByID(r, rawID)
+		if err != nil {
+			s.renderErrorPage(w, r, err, "Pin not found")
+			return
+		}
+		related = fetchRelated(pin)
+	}
+
+	query := r.URL.Query().Get("q")
+	scope := firstNonEmptyQuery(r.URL.Query().Get("s"), "pins")
 
 	isSafari := isSafariRequest(r)
 	hasVideo := pin.IsVideo || pinsHaveVideo(related)
@@ -613,13 +659,75 @@ func (s *Server) handlePinCommentsPage(w http.ResponseWriter, r *http.Request, r
 }
 
 func (s *Server) handleUserPage(w http.ResponseWriter, r *http.Request, username, tab string) {
-	profile, _, err := s.loadProfile(r.Context(), username)
-	if err != nil {
-		s.renderErrorPage(w, r, err, "Profile not found")
-		return
-	}
 	bookmark := r.URL.Query().Get("bookmark")
 	allowUnverified := true
+
+	var (
+		profile *pinterest.UserProfile
+		profErr error
+		boards  *pinterest.PageResult[pinterest.Board]
+		pins    *pinterest.PageResult[pinterest.Pin]
+		feedErr error
+	)
+
+	switch tab {
+	case "created":
+		profile, _, profErr = s.loadProfile(r.Context(), username)
+		if profErr != nil {
+			s.renderErrorPage(w, r, profErr, "Profile not found")
+			return
+		}
+		if profile.ID == "" {
+			s.renderErrorPage(w, r, fmt.Errorf("profile missing user_id"), "Created pins unavailable")
+			return
+		}
+		pins, _, feedErr = s.cachedUserCreatedPins(r.Context(), profile.Username, profile.ID, 25, bookmark, &allowUnverified)
+		if feedErr != nil {
+			s.renderErrorPage(w, r, feedErr, "Failed to load created pins")
+			return
+		}
+	case "pins":
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			profile, _, profErr = s.loadProfile(r.Context(), username)
+		}()
+		go func() {
+			defer wg.Done()
+			pins, _, feedErr = s.cachedUserPins(r.Context(), username, 25, bookmark, &allowUnverified)
+		}()
+		wg.Wait()
+		if profErr != nil {
+			s.renderErrorPage(w, r, profErr, "Profile not found")
+			return
+		}
+		if feedErr != nil {
+			s.renderErrorPage(w, r, feedErr, "Failed to load saved pins")
+			return
+		}
+	default:
+		tab = "boards"
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			profile, _, profErr = s.loadProfile(r.Context(), username)
+		}()
+		go func() {
+			defer wg.Done()
+			boards, _, feedErr = s.cachedUserBoards(r.Context(), username, bookmark)
+		}()
+		wg.Wait()
+		if profErr != nil {
+			s.renderErrorPage(w, r, profErr, "Profile not found")
+			return
+		}
+		if feedErr != nil {
+			s.renderErrorPage(w, r, feedErr, "Failed to load user boards")
+			return
+		}
+	}
 
 	ogDesc := firstNonEmptyQuery(profile.About, fmt.Sprintf("%d followers · %d pins · %d boards on Flinternet", profile.FollowerCount, profile.PinCount, profile.BoardCount))
 	data := userPageData{
@@ -639,42 +747,14 @@ func (s *Server) handleUserPage(w http.ResponseWriter, r *http.Request, username
 		Tab:     tab,
 	}
 
-	switch tab {
-	case "created":
-		if profile.ID == "" {
-			s.renderErrorPage(w, r, fmt.Errorf("profile missing user_id"), "Created pins unavailable")
-			return
-		}
-		page, err := s.client.PublicCreatedPins(r.Context(), profile.Username, profile.ID, 25, bookmark, &allowUnverified)
-		if err != nil {
-			s.renderErrorPage(w, r, err, "Failed to load created pins")
-			return
-		}
-		s.indexPins(page.Results)
-		data.Pins = page.Results
-		data.Bookmark = page.Bookmark
-		data.HasVideo = pinsHaveVideo(page.Results)
-		data.PinTokens = s.buildPinTokens(page.Results)
-	case "pins":
-		page, err := s.client.PublicProfilePins(r.Context(), profile.Username, 25, bookmark, &allowUnverified)
-		if err != nil {
-			s.renderErrorPage(w, r, err, "Failed to load saved pins")
-			return
-		}
-		s.indexPins(page.Results)
-		data.Pins = page.Results
-		data.Bookmark = page.Bookmark
-		data.HasVideo = pinsHaveVideo(page.Results)
-		data.PinTokens = s.buildPinTokens(page.Results)
-	default:
-		data.Tab = "boards"
-		page, err := s.client.PublicProfileBoards(r.Context(), profile.Username, bookmark)
-		if err != nil {
-			s.renderErrorPage(w, r, err, "Failed to load user boards")
-			return
-		}
-		data.Boards = page.Results
-		data.Bookmark = page.Bookmark
+	if boards != nil {
+		data.Boards = boards.Results
+		data.Bookmark = boards.Bookmark
+	} else if pins != nil {
+		data.Pins = pins.Results
+		data.Bookmark = pins.Bookmark
+		data.HasVideo = pinsHaveVideo(pins.Results)
+		data.PinTokens = s.buildPinTokens(pins.Results)
 	}
 
 	s.renderTemplate(w, r, http.StatusOK, "user.html", &data)
@@ -690,12 +770,11 @@ func (s *Server) handleBoardPage(w http.ResponseWriter, r *http.Request, usernam
 	allowUnverified := true
 	sourceURL := fmt.Sprintf("/%s/%s/", url.PathEscape(username), url.PathEscape(slug))
 
-	page, err := s.client.PublicBoardPins(r.Context(), board.ID, sourceURL, 25, bookmark, &allowUnverified)
+	page, _, err := s.cachedBoardPins(r.Context(), board.ID, sourceURL, 25, bookmark, &allowUnverified)
 	if err != nil {
 		s.renderErrorPage(w, r, err, "Failed to load board pins")
 		return
 	}
-	s.indexPins(page.Results)
 
 	ogImage := board.CoverURL
 	if ogImage == "" && len(page.Results) > 0 {
@@ -725,7 +804,7 @@ func (s *Server) handleBoardPage(w http.ResponseWriter, r *http.Request, usernam
 }
 
 func (s *Server) handleIdeasIndexPage(w http.ResponseWriter, r *http.Request) {
-	page, err := s.client.PublicProfileBoards(r.Context(), "pinterest", r.URL.Query().Get("bookmark"))
+	page, _, err := s.cachedUserBoards(r.Context(), "pinterest", r.URL.Query().Get("bookmark"))
 	if err != nil {
 		s.renderErrorPage(w, r, err, "Failed to load ideas")
 		return
@@ -750,12 +829,11 @@ func (s *Server) handleIdeasIndexPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleIdeasTopicPage(w http.ResponseWriter, r *http.Request, slug, interestID string) {
 	bookmark := r.URL.Query().Get("bookmark")
-	page, err := s.client.PublicIdeas(r.Context(), slug, interestID, bookmark)
+	page, _, err := s.cachedIdeas(r.Context(), slug, interestID, bookmark)
 	if err != nil {
 		s.renderErrorPage(w, r, err, "Failed to load topic ideas")
 		return
 	}
-	s.indexPins(page.Results)
 	title := strings.ReplaceAll(slug, "-", " ")
 	var (
 		ogImage string

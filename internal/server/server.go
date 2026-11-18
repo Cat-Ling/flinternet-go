@@ -3,6 +3,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,7 +62,9 @@ type Server struct {
 	createdPinsCache   *cache.Cache[string, *pinterest.PageResult[pinterest.Pin]]
 	boardCache         *cache.Cache[string, *pinterest.Board]
 	boardPinsCache     *cache.Cache[string, *pinterest.PageResult[pinterest.Pin]]
+	ideasCache         *cache.Cache[string, *pinterest.PageResult[pinterest.Pin]]
 	pinCache           *cache.Cache[string, pinterest.Pin]
+	enrichedPins       *cache.Cache[string, struct{}]
 	hlsCache           *cache.Cache[string, string]
 }
 
@@ -107,7 +111,9 @@ func New(cfg Config) (*Server, error) {
 		createdPinsCache:   cache.New[string, *pinterest.PageResult[pinterest.Pin]](defaultCacheItems, ttl),
 		boardCache:         cache.New[string, *pinterest.Board](defaultCacheItems, ttl),
 		boardPinsCache:     cache.New[string, *pinterest.PageResult[pinterest.Pin]](defaultCacheItems, ttl),
+		ideasCache:         cache.New[string, *pinterest.PageResult[pinterest.Pin]](defaultCacheItems, ttl),
 		pinCache:           cache.New[string, pinterest.Pin](defaultPinCache, 30*time.Minute),
+		enrichedPins:       cache.New[string, struct{}](defaultPinCache, 30*time.Minute),
 		hlsCache:           cache.New[string, string](defaultCacheItems, ttl),
 	}
 	s.registerRoutes()
@@ -310,7 +316,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	switch reqParams.Scope {
 	case pinterest.ScopePins, pinterest.ScopeVideos:
-		page, cached, err := s.cachedSearchPins(r, reqParams)
+		page, cached, err := s.cachedSearchPins(r.Context(), reqParams)
 		if err != nil {
 			writePinterestError(w, err)
 			return
@@ -499,19 +505,25 @@ func (s *Server) handleUserBoards(w http.ResponseWriter, r *http.Request) {
 	bookmark := r.URL.Query().Get("bookmark")
 	includeRaw := parseBoolParam(r.URL.Query().Get("raw"))
 
-	cacheKey := strings.ToLower(strings.TrimPrefix(username, "@")) + "|" + bookmark
-	if page, ok := s.profileBoardsCache.Get(cacheKey); ok {
-		s.writeBoardsResponse(w, username, page, true, includeRaw)
-		return
-	}
-
-	page, err := s.client.PublicProfileBoards(r.Context(), username, bookmark)
+	page, cached, err := s.cachedUserBoards(r.Context(), username, bookmark)
 	if err != nil {
 		writePinterestError(w, err)
 		return
 	}
+	s.writeBoardsResponse(w, username, page, cached, includeRaw)
+}
+
+func (s *Server) cachedUserBoards(ctx context.Context, username, bookmark string) (*pinterest.PageResult[pinterest.Board], bool, error) {
+	cacheKey := strings.ToLower(strings.TrimPrefix(username, "@")) + "|" + bookmark
+	if page, ok := s.profileBoardsCache.Get(cacheKey); ok {
+		return page, true, nil
+	}
+	page, err := s.client.PublicProfileBoards(ctx, username, bookmark)
+	if err != nil {
+		return nil, false, err
+	}
 	s.profileBoardsCache.Set(cacheKey, page)
-	s.writeBoardsResponse(w, username, page, false, includeRaw)
+	return page, false, nil
 }
 
 func (s *Server) writeBoardsResponse(w http.ResponseWriter, username string, page *pinterest.PageResult[pinterest.Board], cached, includeRaw bool) {
@@ -540,20 +552,26 @@ func (s *Server) handleUserPins(w http.ResponseWriter, r *http.Request) {
 	allowUnverified := parseOptionalBoolParam(q.Get("allow_unverified"))
 	includeRaw := parseBoolParam(q.Get("raw"))
 
-	cacheKey := fmt.Sprintf("%s|%d|%s", strings.ToLower(strings.TrimPrefix(username, "@")), pageSize, bookmark)
-	if page, ok := s.profilePinsCache.Get(cacheKey); ok {
-		s.writePinsResponse(w, username, page, true, includeRaw)
-		return
-	}
-
-	page, err := s.client.PublicProfilePins(r.Context(), username, pageSize, bookmark, allowUnverified)
+	page, cached, err := s.cachedUserPins(r.Context(), username, pageSize, bookmark, allowUnverified)
 	if err != nil {
 		writePinterestError(w, err)
 		return
 	}
+	s.writePinsResponse(w, username, page, cached, includeRaw)
+}
+
+func (s *Server) cachedUserPins(ctx context.Context, username string, pageSize int, bookmark string, allowUnverified *bool) (*pinterest.PageResult[pinterest.Pin], bool, error) {
+	cacheKey := fmt.Sprintf("%s|%d|%s", strings.ToLower(strings.TrimPrefix(username, "@")), pageSize, bookmark)
+	if page, ok := s.profilePinsCache.Get(cacheKey); ok {
+		return page, true, nil
+	}
+	page, err := s.client.PublicProfilePins(ctx, username, pageSize, bookmark, allowUnverified)
+	if err != nil {
+		return nil, false, err
+	}
 	s.indexPins(page.Results)
 	s.profilePinsCache.Set(cacheKey, page)
-	s.writePinsResponse(w, username, page, false, includeRaw)
+	return page, false, nil
 }
 
 func (s *Server) handleUserCreatedPins(w http.ResponseWriter, r *http.Request) {
@@ -578,20 +596,26 @@ func (s *Server) handleUserCreatedPins(w http.ResponseWriter, r *http.Request) {
 		userID = profile.ID
 	}
 
-	cacheKey := fmt.Sprintf("%s|%s|%d|%s", strings.ToLower(strings.TrimPrefix(username, "@")), userID, pageSize, bookmark)
-	if page, ok := s.createdPinsCache.Get(cacheKey); ok {
-		s.writePinsResponse(w, username, page, true, includeRaw)
-		return
-	}
-
-	page, err := s.client.PublicCreatedPins(r.Context(), username, userID, pageSize, bookmark, allowUnverified)
+	page, cached, err := s.cachedUserCreatedPins(r.Context(), username, userID, pageSize, bookmark, allowUnverified)
 	if err != nil {
 		writePinterestError(w, err)
 		return
 	}
+	s.writePinsResponse(w, username, page, cached, includeRaw)
+}
+
+func (s *Server) cachedUserCreatedPins(ctx context.Context, username, userID string, pageSize int, bookmark string, allowUnverified *bool) (*pinterest.PageResult[pinterest.Pin], bool, error) {
+	cacheKey := fmt.Sprintf("%s|%s|%d|%s", strings.ToLower(strings.TrimPrefix(username, "@")), userID, pageSize, bookmark)
+	if page, ok := s.createdPinsCache.Get(cacheKey); ok {
+		return page, true, nil
+	}
+	page, err := s.client.PublicCreatedPins(ctx, username, userID, pageSize, bookmark, allowUnverified)
+	if err != nil {
+		return nil, false, err
+	}
 	s.indexPins(page.Results)
 	s.createdPinsCache.Set(cacheKey, page)
-	s.writePinsResponse(w, username, page, false, includeRaw)
+	return page, false, nil
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
@@ -658,20 +682,26 @@ func (s *Server) handleBoardFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveBoardFeed(w http.ResponseWriter, ctx context.Context, boardID, sourceURL string, pageSize int, bookmark string, allowUnverified *bool, includeRaw bool) {
-	cacheKey := fmt.Sprintf("%s|%d|%s", boardID, pageSize, bookmark)
-	if page, ok := s.boardPinsCache.Get(cacheKey); ok {
-		s.writePinsResponse(w, boardID, page, true, includeRaw)
-		return
-	}
-
-	page, err := s.client.PublicBoardPins(ctx, boardID, sourceURL, pageSize, bookmark, allowUnverified)
+	page, cached, err := s.cachedBoardPins(ctx, boardID, sourceURL, pageSize, bookmark, allowUnverified)
 	if err != nil {
 		writePinterestError(w, err)
 		return
 	}
+	s.writePinsResponse(w, boardID, page, cached, includeRaw)
+}
+
+func (s *Server) cachedBoardPins(ctx context.Context, boardID, sourceURL string, pageSize int, bookmark string, allowUnverified *bool) (*pinterest.PageResult[pinterest.Pin], bool, error) {
+	cacheKey := fmt.Sprintf("%s|%d|%s", boardID, pageSize, bookmark)
+	if page, ok := s.boardPinsCache.Get(cacheKey); ok {
+		return page, true, nil
+	}
+	page, err := s.client.PublicBoardPins(ctx, boardID, sourceURL, pageSize, bookmark, allowUnverified)
+	if err != nil {
+		return nil, false, err
+	}
 	s.indexPins(page.Results)
 	s.boardPinsCache.Set(cacheKey, page)
-	s.writePinsResponse(w, boardID, page, false, includeRaw)
+	return page, false, nil
 }
 
 func (s *Server) writePinsResponse(w http.ResponseWriter, subject string, page *pinterest.PageResult[pinterest.Pin], cached, includeRaw bool) {
@@ -692,12 +722,12 @@ func (s *Server) writePinsResponse(w http.ResponseWriter, subject string, page *
 	})
 }
 
-func (s *Server) cachedSearchPins(r *http.Request, params pinterest.SearchParams) (*pinterest.PageResult[pinterest.Pin], bool, error) {
+func (s *Server) cachedSearchPins(ctx context.Context, params pinterest.SearchParams) (*pinterest.PageResult[pinterest.Pin], bool, error) {
 	key := fmt.Sprintf("%s|%s|%d|%s|%t|%s", params.Query, params.Scope, derefInt(params.PageSize), params.RS, params.FilterGenAI, params.Bookmark)
 	if page, ok := s.searchPinsCache.Get(key); ok {
 		return page, true, nil
 	}
-	page, err := s.client.SearchPins(r.Context(), params)
+	page, err := s.client.SearchPins(ctx, params)
 	if err != nil {
 		return nil, false, err
 	}
@@ -758,7 +788,8 @@ func (s *Server) loadPinByID(r *http.Request, rawID string) (pinterest.Pin, erro
 		return pinterest.Pin{}, fmt.Errorf("pin id is required")
 	}
 	cached, ok := s.pinCache.Get(pinID)
-	needsEnrich := !ok || (!strings.HasPrefix(pinID, "e1_") && cached.Saves == 0 && cached.Repins == 0)
+	_, alreadyEnriched := s.enrichedPins.Get(pinID)
+	needsEnrich := !ok || (!strings.HasPrefix(pinID, "e1_") && !alreadyEnriched && cached.Saves == 0 && cached.Repins == 0)
 	if needsEnrich {
 		if !ok && strings.HasPrefix(pinID, "e1_") {
 			if tok := strings.TrimSpace(r.URL.Query().Get("p")); tok != "" {
@@ -778,6 +809,7 @@ func (s *Server) loadPinByID(r *http.Request, rawID string) (pinterest.Pin, erro
 		}
 		fetched, err := s.client.PublicPin(r.Context(), pinID)
 		if err == nil {
+			s.enrichedPins.Set(pinID, struct{}{})
 			s.pinCache.Set(pinID, *fetched)
 			return *fetched, nil
 		}
@@ -826,7 +858,7 @@ func (s *Server) handlePinDetail(w http.ResponseWriter, r *http.Request) {
 	var related []pinterest.Pin
 	if parseBoolParam(r.URL.Query().Get("related")) {
 		if query := relatedSearchQuery(pin); query != "" {
-			if page, _, relErr := s.cachedSearchPins(r, pinterest.SearchParams{Query: query, Scope: pinterest.ScopePins}); relErr == nil {
+			if page, _, relErr := s.cachedSearchPins(r.Context(), pinterest.SearchParams{Query: query, Scope: pinterest.ScopePins}); relErr == nil {
 				for _, item := range page.Results {
 					if item.ID != pin.ID {
 						related = append(related, item)
@@ -887,26 +919,46 @@ func (s *Server) handleIdeasAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	includeRaw := parseBoolParam(q.Get("raw"))
 
-	page, err := s.client.PublicIdeas(r.Context(), slug, interestID, q.Get("bookmark"))
+	page, cached, err := s.cachedIdeas(r.Context(), slug, interestID, q.Get("bookmark"))
 	if err != nil {
 		writePinterestError(w, err)
 		return
 	}
+	s.writePinsResponse(w, interestID, page, cached, includeRaw)
+}
+
+func (s *Server) cachedIdeas(ctx context.Context, slug, interestID, bookmark string) (*pinterest.PageResult[pinterest.Pin], bool, error) {
+	cacheKey := strings.ToLower(strings.TrimSpace(slug)) + "|" + strings.TrimSpace(interestID) + "|" + bookmark
+	if page, ok := s.ideasCache.Get(cacheKey); ok {
+		return page, true, nil
+	}
+	page, err := s.client.PublicIdeas(ctx, slug, interestID, bookmark)
+	if err != nil {
+		return nil, false, err
+	}
 	s.indexPins(page.Results)
-	s.writePinsResponse(w, interestID, page, false, includeRaw)
+	s.ideasCache.Set(cacheKey, page)
+	return page, false, nil
 }
 
 func (s *Server) handleMediaProxy(w http.ResponseWriter, r *http.Request) {
 	s.handleMediaProxyWithURL(w, r, r.URL.Query().Get("url"))
 }
 
+func writeHLSManifestResponse(w http.ResponseWriter, method, manifest string) {
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Content-Length", strconv.Itoa(len(manifest)))
+	w.WriteHeader(http.StatusOK)
+	if method != http.MethodHead {
+		_, _ = io.WriteString(w, manifest)
+	}
+}
+
 func (s *Server) handleMediaProxyWithURL(w http.ResponseWriter, r *http.Request, rawURL string) {
 	if s.hlsCache != nil {
 		if cachedManifest, ok := s.hlsCache.Get(rawURL); ok {
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			w.Header().Set("Cache-Control", "public, max-age=300")
-			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, cachedManifest)
+			writeHLSManifestResponse(w, r.Method, cachedManifest)
 			return
 		}
 	}
@@ -924,14 +976,30 @@ func (s *Server) handleMediaProxyWithURL(w http.ResponseWriter, r *http.Request,
 			writePinterestError(w, err)
 			return
 		}
-		rewritten := pinterest.RewriteHLSManifest(string(manifestBytes), resp.SourceURL, "/api/v1/media/proxy?url=")
+		if len(manifestBytes) >= 2 && manifestBytes[0] == 0x1f && manifestBytes[1] == 0x8b {
+			gz, gzErr := gzip.NewReader(bytes.NewReader(manifestBytes))
+			if gzErr != nil {
+				writeError(w, http.StatusBadGateway, string(pinterest.CodeProtocolError), "invalid gzip upstream HLS manifest", resp.StatusCode, resp.ContentType, "")
+				return
+			}
+			uncompressed, readErr := io.ReadAll(io.LimitReader(gz, 2*1024*1024))
+			_ = gz.Close()
+			if readErr != nil {
+				writeError(w, http.StatusBadGateway, string(pinterest.CodeProtocolError), "failed decompressing upstream HLS manifest", resp.StatusCode, resp.ContentType, "")
+				return
+			}
+			manifestBytes = uncompressed
+		}
+		manifestText := strings.TrimPrefix(string(manifestBytes), "\ufeff")
+		if !strings.HasPrefix(strings.TrimSpace(manifestText), "#EXTM3U") {
+			writeError(w, http.StatusBadGateway, string(pinterest.CodeProtocolError), "invalid upstream HLS manifest", resp.StatusCode, resp.ContentType, "")
+			return
+		}
+		rewritten := pinterest.RewriteHLSManifest(manifestText, resp.SourceURL, "/api/v1/media/proxy?url=")
 		if s.hlsCache != nil {
 			s.hlsCache.Set(rawURL, rewritten)
 		}
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Header().Set("Cache-Control", "public, max-age=300")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, rewritten)
+		writeHLSManifestResponse(w, r.Method, rewritten)
 		return
 	}
 
@@ -949,8 +1017,10 @@ func (s *Server) handleMediaProxyWithURL(w http.ResponseWriter, r *http.Request,
 		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		s.logger.Debug("media proxy stream interrupted", "error", err)
+	if r.Method != http.MethodHead {
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			s.logger.Debug("media proxy stream interrupted", "error", err)
+		}
 	}
 }
 

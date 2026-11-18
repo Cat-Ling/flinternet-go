@@ -524,6 +524,34 @@ func BestVideoVariant(videos map[string]VideoVariant) (VideoVariant, bool) {
 	return VideoVariant{}, false
 }
 
+// DeriveExpMP4FromHLS constructs the progressive 720w MP4 URL corresponding to a sharded iht/hls manifest.
+func DeriveExpMP4FromHLS(hlsURL string) string {
+	const prefix = "https://v1.pinimg.com/videos/iht/hls/"
+	const suffix = ".m3u8"
+	if !strings.HasPrefix(hlsURL, prefix) || !strings.HasSuffix(hlsURL, suffix) {
+		return ""
+	}
+	mid := strings.TrimSuffix(strings.TrimPrefix(hlsURL, prefix), suffix)
+	parts := strings.Split(mid, "/")
+	if len(parts) != 4 {
+		return ""
+	}
+	hexID := parts[3]
+	if len(hexID) != 32 {
+		return ""
+	}
+	for i := 0; i < len(hexID); i++ {
+		c := hexID[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return ""
+		}
+	}
+	if parts[0] != hexID[0:2] || parts[1] != hexID[2:4] || parts[2] != hexID[4:6] {
+		return ""
+	}
+	return "https://v1.pinimg.com/videos/iht/expMp4/" + mid + "_720w.mp4"
+}
+
 func bestMatchingVideo(videos map[string]VideoVariant, keys []string) (VideoVariant, bool) {
 	for _, key := range keys {
 		if v, ok := videos[key]; ok && v.URL != "" {
@@ -898,6 +926,12 @@ func NormalizePin(raw json.RawMessage) (Pin, error) {
 		if mp4, ok := bestMatchingVideo(videos, []string{"V_1080P", "V_1080P_MP4", "V_720P", "V_720P_MP4", "V_EXP7", "V_480P", "V_360P"}); ok {
 			pin.MP4VideoURL = mp4.URL
 			pin.ProxyMP4VideoURL = mp4.ProxyURL
+		}
+		if pin.MP4VideoURL == "" && pin.HLSVideoURL != "" {
+			if derived := DeriveExpMP4FromHLS(pin.HLSVideoURL); derived != "" {
+				pin.MP4VideoURL = derived
+				pin.ProxyMP4VideoURL = ProxyPath(derived)
+			}
 		}
 		pin.VideoURL = firstNonEmpty(pin.HLSVideoURL, pin.MP4VideoURL, bestVid.URL)
 		pin.ProxyVideoURL = ProxyPath(pin.VideoURL)

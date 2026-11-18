@@ -117,7 +117,7 @@
       <div class="post-media" {{if and .Width .Height}}style="padding-bottom: calc({{.Height}} / {{.Width}} * 100%);"{{else}}style="padding-bottom: 133.33%;"{{end}}{{if .DominantColor}} data-color="{{.DominantColor}}"{{end}}>
         {{if .IsVideo}}
           <div class="video-container paused" data-pin-id="{{.ID}}">
-            <video playsinline preload="metadata"
+            <video playsinline preload="none"
               poster="{{if .ThumbnailURL}}{{.ThumbnailURL | proxyURL}}{{else if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
               data-src="{{if .HLSVideoURL}}{{.HLSVideoURL | proxyURL}}{{else}}{{.VideoURL | proxyURL}}{{end}}"
               {{if .MP4VideoURL}}data-mp4="{{.MP4VideoURL | proxyURL}}"{{end}}
@@ -146,8 +146,7 @@
               {{if and .Width .Height}}width="{{.Width}}" height="{{.Height}}"{{end}}
               src="{{if .ThumbnailURL}}{{.ThumbnailURL | proxyURL}}{{else if $.IsSafari}}{{.ImageURL | proxyURL}}{{else}}{{.FallbackImageURL | proxyURL}}{{end}}"
               alt="{{if .AltText}}{{.AltText}}{{else if .Title}}{{.Title}}{{else}}Pinterest Pin{{end}}"
-              onload="this.closest('.post-media')?.classList.add('is-loaded');if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()"
-              onerror="this.closest('.post-media')?.classList.add('is-loaded')">
+              onload="this.closest('.post-media')?.classList.add('is-loaded');if(typeof window.recalculateMasonry==='function')window.recalculateMasonry()">
           </a>
         {{end}}
       </div>

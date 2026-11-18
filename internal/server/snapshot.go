@@ -284,10 +284,15 @@ func snapshotFromPin(p pinterest.Pin) pinSnapshot {
 		tags = append(tags, p.VisualTags[:limit]...)
 	}
 
+	mp4Spec := ""
+	if p.MP4VideoURL != "" && p.MP4VideoURL != pinterest.DeriveExpMP4FromHLS(p.HLSVideoURL) {
+		mp4Spec = encodeVideoSpec(p.MP4VideoURL)
+	}
+
 	snap := pinSnapshot{
 		Img:      encodeImageSpec(p.ImageURL),
 		HLS:      encodeVideoSpec(p.HLSVideoURL),
-		MP4:      encodeVideoSpec(p.MP4VideoURL),
+		MP4:      mp4Spec,
 		Width:    p.Width,
 		Height:   p.Height,
 		Duration: p.Duration,
@@ -599,6 +604,9 @@ func decodePinSnapshot(codec *shareCodec, pinID, token string) (pin pinterest.Pi
 	}
 	hlsURL := decodeVideoSpec(snap.HLS)
 	mp4URL := decodeVideoSpec(snap.MP4)
+	if mp4URL == "" && hlsURL != "" {
+		mp4URL = pinterest.DeriveExpMP4FromHLS(hlsURL)
+	}
 	videoURL := firstNonEmptyQuery(hlsURL, mp4URL)
 	if imgURL == "" && videoURL == "" {
 		return pinterest.Pin{}, false, false

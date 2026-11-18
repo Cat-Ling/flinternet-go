@@ -2,10 +2,12 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -614,5 +616,151 @@ func TestLessAIDefaultAndCookiePersistence(t *testing.T) {
 		if seenFilterGenAI[i] != want[i] {
 			t.Fatalf("step %d upstream filter_genai=%v, want %v", i, seenFilterGenAI[i], want[i])
 		}
+	}
+}
+
+func TestMediaProxyHLSGzipAndCacheValidation(t *testing.T) {
+	mediaCalls := 0
+	returnGarbageOnce := true
+
+	mediaTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mediaCalls++
+		rec := httptest.NewRecorder()
+		if strings.Contains(req.URL.Path, "garbage.m3u8") && returnGarbageOnce {
+			returnGarbageOnce = false
+			rec.Header().Set("Content-Type", "application/x-mpegURL")
+			_, _ = rec.WriteString("not-an-extm3u-playlist")
+			return rec.Result(), nil
+		}
+		if req.Header.Get("Range") != "" {
+			t.Fatalf("expected Range header to be stripped on .m3u8 upstream request, got %q", req.Header.Get("Range"))
+		}
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, _ = gz.Write([]byte("#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"audio.m3u8\"\n61b769d4b88ae6d4d39e3b3d1ca84553_720w.m3u8\n"))
+		_ = gz.Close()
+
+		rec.Header().Set("Content-Type", "application/x-mpegURL")
+		rec.Header().Set("Content-Encoding", "gzip")
+		_, _ = rec.Write(buf.Bytes())
+		return rec.Result(), nil
+	})
+
+	client, err := pinterest.NewClient(pinterest.Config{
+		BaseURL:        pinterest.DefaultBaseURL,
+		MediaTransport: mediaTransport,
+	})
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	staticFS, _ := web.StaticFS()
+	tmplFS, _ := web.TemplatesFS()
+	srv, err := New(Config{
+		Client:      client,
+		StaticFS:    staticFS,
+		TemplatesFS: tmplFS,
+		CacheTTL:    time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("server.New failed: %v", err)
+	}
+	h := srv.Handler()
+
+	// 1. Valid gzip-compressed .m3u8 requested with Range: bytes=0- is decompressed, rewritten, and cached.
+	validTarget := "https://v1.pinimg.com/videos/iht/hls/61/b7/69/61b769d4b88ae6d4d39e3b3d1ca84553.m3u8"
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/media/proxy?url="+url.QueryEscape(validTarget), nil)
+	req1.Header.Set("Range", "bytes=0-")
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for gzip HLS proxy, got %d (%s)", rec1.Code, rec1.Body.String())
+	}
+	body1 := rec1.Body.String()
+	if strings.Contains(body1, "# blocked non-allowlisted segment URI") ||
+		!strings.Contains(body1, "/api/v1/media/proxy?url=https%3A%2F%2Fv1.pinimg.com%2Fvideos%2Fiht%2Fhls%2F61%2Fb7%2F69%2Faudio.m3u8") ||
+		!strings.Contains(body1, "/api/v1/media/proxy?url=https%3A%2F%2Fv1.pinimg.com%2Fvideos%2Fiht%2Fhls%2F61%2Fb7%2F69%2F61b769d4b88ae6d4d39e3b3d1ca84553_720w.m3u8") {
+		t.Fatalf("unexpected rewritten HLS playlist:\n%s", body1)
+	}
+
+	// Second request hits hlsCache without hitting upstream.
+	callsBeforeHit := mediaCalls
+	rec2 := doRequest(t, h, http.MethodGet, "/api/v1/media/proxy?url="+url.QueryEscape(validTarget), nil)
+	if rec2.Code != http.StatusOK || rec2.Body.String() != body1 || mediaCalls != callsBeforeHit {
+		t.Fatalf("expected hlsCache hit on second request: code=%d calls=%d", rec2.Code, mediaCalls-callsBeforeHit)
+	}
+
+	// 2. Non-#EXTM3U response returns 502 and is NOT cached in hlsCache.
+	garbageTarget := "https://v1.pinimg.com/videos/iht/hls/61/b7/69/garbage.m3u8"
+	recBad := doRequest(t, h, http.MethodGet, "/api/v1/media/proxy?url="+url.QueryEscape(garbageTarget), nil)
+	if recBad.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for non-EXTM3U response, got %d (%s)", recBad.Code, recBad.Body.String())
+	}
+	if _, cached := srv.hlsCache.Get(garbageTarget); cached {
+		t.Fatalf("invalid HLS manifest must never be cached in hlsCache")
+	}
+	// Subsequent request succeeds once upstream returns valid #EXTM3U.
+	recRecovered := doRequest(t, h, http.MethodGet, "/api/v1/media/proxy?url="+url.QueryEscape(garbageTarget), nil)
+	if recRecovered.Code != http.StatusOK || !strings.HasPrefix(recRecovered.Body.String(), "#EXTM3U") {
+		t.Fatalf("expected recovery after uncached 502, got %d (%s)", recRecovered.Code, recRecovered.Body.String())
+	}
+}
+
+func TestVideoGridPreloadNoneAndDerivedMP4(t *testing.T) {
+	mockTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Type", "application/json")
+		_, _ = rec.WriteString(`{
+			"resource_response": {
+				"status": "success",
+				"data": {
+					"results": [
+						{
+							"id": "e1_vid-only-hls",
+							"title": "Cat Clip",
+							"images": {"736x": {"url": "https://i.pinimg.com/736x/cat.jpg", "width": 720, "height": 1280}},
+							"videos": {
+								"video_list": {
+									"V_HLSV4": {"url": "https://v1.pinimg.com/videos/iht/hls/61/b7/69/61b769d4b88ae6d4d39e3b3d1ca84553.m3u8", "width": 720, "height": 1280, "duration": 6800}
+								}
+							}
+						}
+					]
+				}
+			}
+		}`)
+		return rec.Result(), nil
+	})
+
+	client, err := pinterest.NewClient(pinterest.Config{
+		BaseURL:    pinterest.DefaultBaseURL,
+		HTTPClient: &http.Client{Transport: mockTransport},
+	})
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	staticFS, _ := web.StaticFS()
+	tmplFS, _ := web.TemplatesFS()
+	srv, err := New(Config{
+		Client:      client,
+		StaticFS:    staticFS,
+		TemplatesFS: tmplFS,
+		CacheTTL:    time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("server.New failed: %v", err)
+	}
+	h := srv.Handler()
+
+	res := doRequest(t, h, http.MethodGet, "/search/videos/?q=cats", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("video search SSR failed: %d", res.Code)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `preload="none"`) || strings.Contains(body, `preload="metadata"`) {
+		t.Fatalf("expected preload=\"none\" on grid video cards")
+	}
+	if !strings.Contains(body, `data-mp4="/api/v1/media/proxy?url=https%3A%2F%2Fv1.pinimg.com%2Fvideos%2Fiht%2FexpMp4%2F61%2Fb7%2F69%2F61b769d4b88ae6d4d39e3b3d1ca84553_720w.mp4"`) {
+		t.Fatalf("expected derived expMp4 data-mp4 attribute on grid video card")
 	}
 }

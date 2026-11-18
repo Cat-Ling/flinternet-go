@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -29,6 +30,7 @@ type Config struct {
 	Timeout                   time.Duration
 	AllowUnverifiedPagination bool
 	HTTPClient                *http.Client
+	MediaTransport            http.RoundTripper
 
 	// allowInsecureForTests permits http://127.0.0.1 or localhost inside package unit tests.
 	allowInsecureForTests bool
@@ -83,6 +85,19 @@ func NewClient(cfg Config) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{
 			Timeout: timeout,
+			Transport: &http.Transport{
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          64,
+				MaxIdleConnsPerHost:   32,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: timeout,
+				DialContext: (&net.Dialer{
+					Timeout:       5 * time.Second,
+					KeepAlive:     30 * time.Second,
+					FallbackDelay: 250 * time.Millisecond,
+				}).DialContext,
+			},
 		}
 	}
 	// Never inherit caller cookie jars or cross-site session state.
@@ -112,7 +127,7 @@ func NewClient(cfg Config) (*Client, error) {
 		allowUnverifiedPagination: cfg.AllowUnverifiedPagination,
 		jar:                       jar,
 		httpClient:                &clonedClient,
-		mediaFetcher:              NewMediaFetcher(timeout, ua),
+		mediaFetcher:              newMediaFetcherWithTransport(timeout, ua, cfg.MediaTransport),
 	}, nil
 }
 
@@ -180,6 +195,44 @@ func encodeResourceData[T any](options T) (string, error) {
 	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
+func (c *Client) applyResourceHeaders(req *http.Request, path, referer, handler, csrf string) {
+	if referer == "" {
+		referer = c.baseURLStr + path
+	}
+	req.Header.Set("Accept", "application/json, text/javascript, */*, q=0.01")
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Referer", referer)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("X-Pinterest-AppState", "active")
+	req.Header.Set("X-Pinterest-Source-Url", path)
+	if handler != "" {
+		req.Header.Set("X-Pinterest-Pws-Handler", handler)
+	}
+	if c.appVersion != "" {
+		req.Header.Set("X-App-Version", c.appVersion)
+	}
+	if csrf != "" {
+		req.Header.Set("X-CSRFToken", csrf)
+	}
+}
+
+func (c *Client) bootstrapCSRF(ctx context.Context) string {
+	bootURL := c.baseURLStr + `/resource/AdvancedTypeaheadResource/get/?source_url=%2F&data=%7B%22options%22%3A%7B%22term%22%3A%22a%22%2C%22pin_scope%22%3A%22pins%22%2C%22autocomplete_request_surface%22%3A0%2C%22count%22%3A1%7D%2C%22context%22%3A%7B%7D%7D`
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bootURL, nil)
+	if err != nil {
+		return ""
+	}
+	c.applyResourceHeaders(req, "/", "", "www/search/[scope].js", "")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResourceBody))
+	resp.Body.Close()
+	return c.jar.CSRFToken(c.baseURL)
+}
+
 func doResourceRequest[T any](ctx context.Context, c *Client, resource string, options T, opts requestOpts) (*resourceEnvelope, json.RawMessage, error) {
 	if err := validateResourceName(resource); err != nil {
 		return nil, nil, err
@@ -200,53 +253,56 @@ func doResourceRequest[T any](ctx context.Context, c *Client, resource string, o
 	}
 
 	endpoint := c.baseURLStr + "/resource/" + resource + "/get/"
-	var req *http.Request
-	switch method {
-	case http.MethodGet:
-		q := url.Values{}
-		q.Set("source_url", path)
-		q.Set("data", dataJSON)
-		q.Set("_", strconv.FormatInt(time.Now().UnixMilli(), 10))
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+q.Encode(), nil)
-	case http.MethodPost:
-		form := url.Values{}
-		form.Set("source_url", path)
-		form.Set("data", dataJSON)
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	execute := func() (*http.Response, string, error) {
+		var req *http.Request
+		var reqErr error
+		switch method {
+		case http.MethodGet:
+			q := url.Values{}
+			q.Set("source_url", path)
+			q.Set("data", dataJSON)
+			q.Set("_", strconv.FormatInt(time.Now().UnixMilli(), 10))
+			req, reqErr = http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+q.Encode(), nil)
+		case http.MethodPost:
+			form := url.Values{}
+			form.Set("source_url", path)
+			form.Set("data", dataJSON)
+			req, reqErr = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+			if reqErr == nil {
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			}
+		default:
+			return nil, "", newError(CodeValidationError, fmt.Sprintf("unsupported HTTP method %q", method), 0, "", "", nil)
 		}
-	default:
-		return nil, nil, newError(CodeValidationError, fmt.Sprintf("unsupported HTTP method %q", method), 0, "", "", nil)
-	}
-	if err != nil {
-		return nil, nil, newError(CodeProtocolError, "failed to build request", 0, "", "", err)
+		if reqErr != nil {
+			return nil, "", newError(CodeProtocolError, "failed to build request", 0, "", "", reqErr)
+		}
+
+		csrf := c.jar.CSRFToken(c.baseURL)
+		c.applyResourceHeaders(req, path, opts.referer, opts.handler, csrf)
+		resp, doErr := c.httpClient.Do(req)
+		if doErr != nil {
+			return nil, "", newError(CodeHTTPError, fmt.Sprintf("network error calling %s: %v", resource, doErr), 0, "", "", doErr)
+		}
+		return resp, csrf, nil
 	}
 
-	referer := opts.referer
-	if referer == "" {
-		referer = c.baseURLStr + path
-	}
-	req.Header.Set("Accept", "application/json, text/javascript, */*, q=0.01")
-	req.Header.Set("User-Agent", c.userAgent)
-	req.Header.Set("DNT", "1")
-	req.Header.Set("Referer", referer)
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("X-Pinterest-AppState", "active")
-	req.Header.Set("X-Pinterest-Source-Url", path)
-	if opts.handler != "" {
-		req.Header.Set("X-Pinterest-Pws-Handler", opts.handler)
-	}
-	if c.appVersion != "" {
-		req.Header.Set("X-App-Version", c.appVersion)
-	}
-	if csrf := c.jar.CSRFToken(c.baseURL); csrf != "" {
-		req.Header.Set("X-CSRFToken", csrf)
-	}
-
-	resp, err := c.httpClient.Do(req)
+	resp, csrf, err := execute()
 	if err != nil {
-		return nil, nil, newError(CodeHTTPError, fmt.Sprintf("network error calling %s: %v", resource, err), 0, "", "", err)
+		return nil, nil, err
+	}
+	if method == http.MethodPost && resp.StatusCode == http.StatusForbidden && csrf == "" {
+		ctype := resp.Header.Get("Content-Type")
+		retryAfter := resp.Header.Get("Retry-After")
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+		if c.bootstrapCSRF(ctx) == "" {
+			return nil, nil, newError(CodeGuestAccessBlocked, "Pinterest denied guest access (HTTP 403); no bypass attempted", http.StatusForbidden, ctype, retryAfter, nil)
+		}
+		resp, _, err = execute()
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	defer resp.Body.Close()
 

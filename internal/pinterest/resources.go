@@ -813,11 +813,21 @@ func (c *Client) PublicPinComments(ctx context.Context, rawPinID, aggregatedPinI
 	}
 	targetID := strings.TrimSpace(aggregatedPinID)
 	if targetID == "" {
-		if pin, err := c.PublicPin(ctx, pinID); err == nil && pin.AggregatedPinID != "" {
-			targetID = pin.AggregatedPinID
-		} else {
+		if !strings.HasPrefix(pinID, "e1_") {
+			if pin, err := c.PublicPin(ctx, pinID); err == nil && pin.AggregatedPinID != "" {
+				targetID = pin.AggregatedPinID
+			}
+		}
+		if targetID == "" {
 			targetID = pinID
 		}
+	}
+	if strings.HasPrefix(targetID, "e1_") {
+		return &CommentResult{
+			Comments:        []Comment{},
+			AggregatedPinID: targetID,
+			Endpoint:        "UnifiedCommentsResource/get",
+		}, nil
 	}
 
 	sourceURL := "/pin/" + url.PathEscape(pinID) + "/"
@@ -837,7 +847,7 @@ func (c *Client) PublicPinComments(ctx context.Context, rawPinID, aggregatedPinI
 		method:    http.MethodGet,
 		handler:   "www/pin/[id].js",
 	})
-	if err != nil && targetID != pinID {
+	if err != nil && targetID != pinID && !strings.HasPrefix(pinID, "e1_") {
 		opts.AggregatedPinID = pinID
 		targetID = pinID
 		env, _, err = doResourceRequest(ctx, c, "UnifiedCommentsResource", opts, requestOpts{

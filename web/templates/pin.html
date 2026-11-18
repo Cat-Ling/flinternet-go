@@ -38,8 +38,7 @@
               {{if and .Pin.Width .Pin.Height}}width="{{.Pin.Width}}" height="{{.Pin.Height}}"{{end}}
               src="{{if .IsSafari}}{{.Pin.ImageURL | proxyURL}}{{else}}{{.Pin.FallbackImageURL | proxyURL}}{{end}}"
               alt="{{if .Pin.AltText}}{{.Pin.AltText}}{{else if .Pin.Title}}{{.Pin.Title}}{{else}}Pinterest Pin{{end}}"
-              onload="this.closest('.pin-media-frame')?.classList.add('is-loaded')"
-              onerror="this.closest('.pin-media-frame')?.classList.add('is-loaded')">
+              onload="this.closest('.pin-media-frame')?.classList.add('is-loaded')">
           </div>
         {{end}}
       </div>

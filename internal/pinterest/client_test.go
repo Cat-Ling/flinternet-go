@@ -1,6 +1,8 @@
 package pinterest
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -567,5 +569,123 @@ func TestExtractPinIDPreservesDoubleHyphenOpaqueIDs(t *testing.T) {
 		if got := ExtractPinID(tc.in); got != tc.want {
 			t.Fatalf("ExtractPinID(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestDerivedExpMP4FromHLSAndOpaqueComments(t *testing.T) {
+	hls := "https://v1.pinimg.com/videos/iht/hls/61/b7/69/61b769d4b88ae6d4d39e3b3d1ca84553.m3u8"
+	wantMP4 := "https://v1.pinimg.com/videos/iht/expMp4/61/b7/69/61b769d4b88ae6d4d39e3b3d1ca84553_720w.mp4"
+
+	pin, err := NormalizePin(json.RawMessage(`{
+		"id": "e1_vid1",
+		"videos": {
+			"video_list": {
+				"V_HLSV4": {"url": "` + hls + `", "width": 720, "height": 1280, "duration": 6800}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NormalizePin failed: %v", err)
+	}
+	if !pin.IsVideo || pin.HLSVideoURL != hls || pin.MP4VideoURL != wantMP4 || pin.ProxyMP4VideoURL == "" {
+		t.Fatalf("expected derived MP4VideoURL %q, got hls=%q mp4=%q proxy=%q", wantMP4, pin.HLSVideoURL, pin.MP4VideoURL, pin.ProxyMP4VideoURL)
+	}
+	if DeriveExpMP4FromHLS("https://v1.pinimg.com/videos/mc/hls/61/b7/69/61b769d4b88ae6d4d39e3b3d1ca84553.m3u8") != "" {
+		t.Fatalf("expected non-iht HLS path not to derive iht/expMp4 URL")
+	}
+
+	upstreamCalls := 0
+	c, _ := newMockServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}, false)
+	comments, err := c.PublicPinComments(context.Background(), "e1_opaque-no-aid", "", "")
+	if err != nil || len(comments.Comments) != 0 || upstreamCalls != 0 {
+		t.Fatalf("expected 0 upstream calls and empty comments for e1_ pin without aid, got err=%v calls=%d", err, upstreamCalls)
+	}
+}
+
+func TestMediaFetcherStripsHLSRangeAndDecompressesGzip(t *testing.T) {
+	var seenM3U8Range, seenSegRange, seenReferer, seenOrigin string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenReferer = r.Header.Get("Referer")
+		seenOrigin = r.Header.Get("Origin")
+		if strings.HasSuffix(r.URL.Path, ".m3u8") {
+			seenM3U8Range = r.Header.Get("Range")
+			var buf bytes.Buffer
+			gz := gzip.NewWriter(&buf)
+			_, _ = gz.Write([]byte("#EXTM3U\n61b769d4b88ae6d4d39e3b3d1ca84553_240w.m3u8\n"))
+			_ = gz.Close()
+			w.Header().Set("Content-Type", "application/x-mpegURL")
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(buf.Bytes())
+			return
+		}
+		seenSegRange = r.Header.Get("Range")
+		w.Header().Set("Content-Type", "video/mp4")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("seg-bytes"))
+	}))
+	defer srv.Close()
+
+	mf := NewMediaFetcher(DefaultTimeout, DefaultUserAgent)
+	mf.allowLoopbackMediaForTests = true
+
+	m3u8Resp, err := mf.Fetch(context.Background(), srv.URL+"/videos/iht/hls/61/b7/69/master.m3u8", "bytes=0-")
+	if err != nil {
+		t.Fatalf("m3u8 Fetch failed: %v", err)
+	}
+	defer m3u8Resp.Body.Close()
+	body, err := io.ReadAll(m3u8Resp.Body)
+	if err != nil {
+		t.Fatalf("read m3u8 body failed: %v", err)
+	}
+	if seenM3U8Range != "" {
+		t.Fatalf("expected Range header stripped on .m3u8 fetch, got %q", seenM3U8Range)
+	}
+	if seenReferer != DefaultBaseURL+"/" || seenOrigin != DefaultBaseURL {
+		t.Fatalf("expected Referer/Origin headers for CDN, got referer=%q origin=%q", seenReferer, seenOrigin)
+	}
+	if !strings.HasPrefix(string(body), "#EXTM3U\n") {
+		t.Fatalf("expected gunzipped #EXTM3U playlist, got %q", string(body))
+	}
+
+	segResp, err := mf.Fetch(context.Background(), srv.URL+"/videos/iht/hls/61/b7/69/seg.cmfv", "bytes=0-983")
+	if err != nil {
+		t.Fatalf("segment Fetch failed: %v", err)
+	}
+	defer segResp.Body.Close()
+	if seenSegRange != "bytes=0-983" {
+		t.Fatalf("expected Range header preserved on segment fetch, got %q", seenSegRange)
+	}
+}
+
+func TestSearchPost403BootstrapsCSRFOnce(t *testing.T) {
+	postCalls := 0
+	bootCalls := 0
+	c, _ := newMockServerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/resource/AdvancedTypeaheadResource/get/":
+			bootCalls++
+			http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "boot-csrf-99", Path: "/"})
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"resource_response":{"status":"success","data":{"items":[]}}}`))
+		case "/resource/BaseSearchResource/get/":
+			postCalls++
+			if r.Header.Get("X-CSRFToken") != "boot-csrf-99" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"resource_response":{"status":"success","data":{"results":[{"id":"e1_p1","images":{"orig":{"url":"https://i.pinimg.com/originals/p1.jpg","width":100,"height":100}}}]}}}`))
+		}
+	}, true)
+
+	page, err := c.SearchPins(context.Background(), SearchParams{Query: "cats", Scope: ScopeVideos, Bookmark: "bm-1"})
+	if err != nil {
+		t.Fatalf("expected CSRF bootstrap retry to succeed, got %v", err)
+	}
+	if len(page.Results) != 1 || bootCalls != 1 || postCalls != 2 {
+		t.Fatalf("unexpected counts: results=%d bootCalls=%d postCalls=%d", len(page.Results), bootCalls, postCalls)
 	}
 }

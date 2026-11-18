@@ -2,6 +2,7 @@ package pinterest
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +90,12 @@ type cachedDNSAddrs struct {
 	expires time.Time
 }
 
+type dnsFlight struct {
+	done  chan struct{}
+	addrs []net.IPAddr
+	err   error
+}
+
 // MediaFetcher safely proxies images, MP4 videos, and HLS playlists from Pinterest CDNs.
 type MediaFetcher struct {
 	httpClient                 *http.Client
@@ -95,8 +103,9 @@ type MediaFetcher struct {
 	maxBytes                   int64
 	allowLoopbackMediaForTests bool
 
-	dnsMu    sync.RWMutex
-	dnsCache map[string]cachedDNSAddrs
+	dnsMu       sync.RWMutex
+	dnsCache    map[string]cachedDNSAddrs
+	dnsInflight map[string]*dnsFlight
 }
 
 func (f *MediaFetcher) lookupValidatedIPs(ctx context.Context, host string) ([]net.IPAddr, error) {
@@ -108,25 +117,74 @@ func (f *MediaFetcher) lookupValidatedIPs(ctx context.Context, host string) ([]n
 		return entry.addrs, nil
 	}
 
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	f.dnsMu.Lock()
+	if entry, ok := f.dnsCache[host]; ok && time.Now().Before(entry.expires) && len(entry.addrs) > 0 {
+		f.dnsMu.Unlock()
+		return entry.addrs, nil
+	}
+	if f.dnsInflight == nil {
+		f.dnsInflight = make(map[string]*dnsFlight)
+	}
+	if flight, pending := f.dnsInflight[host]; pending {
+		f.dnsMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.addrs, flight.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	flight := &dnsFlight{done: make(chan struct{})}
+	f.dnsInflight[host] = flight
+	f.dnsMu.Unlock()
+
+	// Decouple shared lookup from a single caller's cancellation while keeping a bounded timeout.
+	lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ips, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	cancel()
+
+	if err == nil {
+		for _, ipAddr := range ips {
+			if IsDisallowedIP(ipAddr.IP) {
+				err = fmt.Errorf("blocked connection to non-public IP %s", ipAddr.IP.String())
+				ips = nil
+				break
+			}
+		}
+	}
+	if err == nil && len(ips) > 1 {
+		sort.SliceStable(ips, func(i, j int) bool {
+			return (ips[i].IP.To4() != nil) && (ips[j].IP.To4() == nil)
+		})
+	}
+
+	flight.addrs = ips
+	flight.err = err
+
+	f.dnsMu.Lock()
+	if err == nil && len(ips) > 0 {
+		if f.dnsCache == nil {
+			f.dnsCache = make(map[string]cachedDNSAddrs)
+		}
+		f.dnsCache[host] = cachedDNSAddrs{addrs: ips, expires: time.Now().Add(60 * time.Second)}
+	}
+	delete(f.dnsInflight, host)
+	close(flight.done)
+	f.dnsMu.Unlock()
+
 	if err != nil {
 		return nil, err
 	}
-	for _, ipAddr := range ips {
-		if IsDisallowedIP(ipAddr.IP) {
-			return nil, fmt.Errorf("blocked connection to non-public IP %s", ipAddr.IP.String())
-		}
-	}
-
-	f.dnsMu.Lock()
-	f.dnsCache[host] = cachedDNSAddrs{addrs: ips, expires: now.Add(60 * time.Second)}
-	f.dnsMu.Unlock()
 	return ips, nil
 }
 
 // NewMediaFetcher builds a MediaFetcher with HTTP/2 multiplexing, pooled sockets,
 // DNS-rebinding protection, and no redirect following.
 func NewMediaFetcher(timeout time.Duration, userAgent string) *MediaFetcher {
+	return newMediaFetcherWithTransport(timeout, userAgent, nil)
+}
+
+func newMediaFetcherWithTransport(timeout time.Duration, userAgent string, customTransport http.RoundTripper) *MediaFetcher {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
@@ -134,49 +192,65 @@ func NewMediaFetcher(timeout time.Duration, userAgent string) *MediaFetcher {
 		userAgent = DefaultUserAgent
 	}
 	f := &MediaFetcher{
-		userAgent: userAgent,
-		maxBytes:  DefaultMaxMediaBytes,
-		dnsCache:  make(map[string]cachedDNSAddrs),
+		userAgent:   userAgent,
+		maxBytes:    DefaultMaxMediaBytes,
+		dnsCache:    make(map[string]cachedDNSAddrs),
+		dnsInflight: make(map[string]*dnsFlight),
 	}
 
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	transport := &http.Transport{
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          128,
-		MaxIdleConnsPerHost:   32,
-		MaxConnsPerHost:       64,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		DisableCompression:    true,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			if f.allowLoopbackMediaForTests {
-				return dialer.DialContext(ctx, network, address)
-			}
-			host, port, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := f.lookupValidatedIPs(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			for _, ipAddr := range ips {
-				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ipAddr.IP.String(), port))
-				if dialErr == nil {
-					return conn, nil
+	transport := customTransport
+	if transport == nil {
+		dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+		transport = &http.Transport{
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          128,
+			MaxIdleConnsPerHost:   32,
+			MaxConnsPerHost:       64,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: timeout,
+			ExpectContinueTimeout: 1 * time.Second,
+			DisableCompression:    true,
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if f.allowLoopbackMediaForTests {
+					return dialer.DialContext(ctx, network, address)
 				}
-				err = dialErr
-			}
-			if err == nil {
-				err = errors.New("no resolved addresses available")
-			}
-			return nil, err
-		},
+				host, port, err := net.SplitHostPort(address)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := f.lookupValidatedIPs(ctx, host)
+				if err != nil {
+					return nil, err
+				}
+				perIPTimeout := min(3*time.Second, timeout)
+				for _, ipAddr := range ips {
+					attemptCtx := ctx
+					var attemptCancel context.CancelFunc
+					if len(ips) > 1 {
+						attemptCtx, attemptCancel = context.WithTimeout(ctx, perIPTimeout)
+					}
+					conn, dialErr := dialer.DialContext(attemptCtx, network, net.JoinHostPort(ipAddr.IP.String(), port))
+					if attemptCancel != nil {
+						attemptCancel()
+					}
+					if dialErr == nil {
+						return conn, nil
+					}
+					err = dialErr
+					if ctx.Err() != nil {
+						break
+					}
+				}
+				if err == nil {
+					err = errors.New("no resolved addresses available")
+				}
+				return nil, err
+			},
+		}
 	}
 
 	f.httpClient = &http.Client{
-		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -240,9 +314,12 @@ func (f *MediaFetcher) Fetch(ctx context.Context, rawURL, rangeHeader string) (*
 	if err != nil {
 		return nil, newError(CodeProtocolError, "failed to create media request", 0, "", "", err)
 	}
+	isHLSPath := strings.HasSuffix(strings.ToLower(u.Path), ".m3u8")
 	req.Header.Set("User-Agent", f.userAgent)
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/*,video/*,audio/*,application/vnd.apple.mpegurl,*/*")
-	if rangeHeader != "" {
+	req.Header.Set("Referer", DefaultBaseURL+"/")
+	req.Header.Set("Origin", DefaultBaseURL)
+	if rangeHeader != "" && !isHLSPath {
 		req.Header.Set("Range", rangeHeader)
 	}
 
@@ -275,16 +352,28 @@ func (f *MediaFetcher) Fetch(ctx context.Context, rawURL, rangeHeader string) (*
 		mediaType = "application/octet-stream"
 	}
 
+	bodyReader := resp.Body
+	contentLength := resp.ContentLength
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
+		gz, gzErr := gzip.NewReader(resp.Body)
+		if gzErr != nil {
+			resp.Body.Close()
+			return nil, newError(CodeProtocolError, fmt.Sprintf("invalid gzip media response: %v", gzErr), resp.StatusCode, rawCT, "", gzErr)
+		}
+		bodyReader = &gzipReadCloser{gz: gz, body: resp.Body}
+		contentLength = -1
+	}
+
 	limited := &limitedReadCloser{
-		reader: io.LimitReader(resp.Body, f.maxBytes+1),
-		closer: resp.Body,
+		reader: io.LimitReader(bodyReader, f.maxBytes+1),
+		closer: bodyReader,
 		max:    f.maxBytes,
 	}
 
 	return &MediaResponse{
 		StatusCode:    resp.StatusCode,
 		ContentType:   mediaType,
-		ContentLength: resp.ContentLength,
+		ContentLength: contentLength,
 		ContentRange:  resp.Header.Get("Content-Range"),
 		AcceptRanges:  resp.Header.Get("Accept-Ranges"),
 		Body:          limited,
@@ -368,4 +457,22 @@ func (l *limitedReadCloser) Read(p []byte) (int, error) {
 
 func (l *limitedReadCloser) Close() error {
 	return l.closer.Close()
+}
+
+type gzipReadCloser struct {
+	gz   *gzip.Reader
+	body io.Closer
+}
+
+func (g *gzipReadCloser) Read(p []byte) (int, error) {
+	return g.gz.Read(p)
+}
+
+func (g *gzipReadCloser) Close() error {
+	gzErr := g.gz.Close()
+	bodyErr := g.body.Close()
+	if gzErr != nil {
+		return gzErr
+	}
+	return bodyErr
 }
